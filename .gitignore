@@ -1,0 +1,107 @@
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+target/
+build/
+out/
+*.class
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# ---------------------------------------------------------------------------
+# Maven
+# ---------------------------------------------------------------------------
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# ---------------------------------------------------------------------------
+# IDE — IntelliJ
+# ---------------------------------------------------------------------------
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea_modules/
+
+# ---------------------------------------------------------------------------
+# IDE — Eclipse / VSCode
+# ---------------------------------------------------------------------------
+.project
+.classpath
+.settings/
+.factorypath
+bin/
+.apt_generated/
+.metadata/
+.recommenders/
+.springBeans
+.sts4-cache/
+.vscode/
+
+# ---------------------------------------------------------------------------
+# IDE — NetBeans
+# ---------------------------------------------------------------------------
+nb-configuration.xml
+nbproject/private/
+nbbuild/
+nbdist/
+.nb-gradle/
+
+# ---------------------------------------------------------------------------
+# OS
+# ---------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ---------------------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------------------
+*.log
+*.log.*
+logs/
+
+# ---------------------------------------------------------------------------
+# Local-only secrets / env files. JWT_SECRET, DB creds, OAuth creds, etc.
+# should NEVER be committed. Use real secret management (env vars, k8s
+# Secrets, Vault). See README.md "Required environment".
+# ---------------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+*.env
+secrets/
+*.pem
+*.key
+*.p12
+*.jks
+
+# ---------------------------------------------------------------------------
+# App-runtime artifacts. uploads/ holds server-controlled fax PDFs;
+# barcodes/ holds generated QR images. Both are local state, not source.
+# ---------------------------------------------------------------------------
+uploads/
+barcodes/
+
+# ---------------------------------------------------------------------------
+# Misc
+# ---------------------------------------------------------------------------
+*.swp
+*.bak
+*~

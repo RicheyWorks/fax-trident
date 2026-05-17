@@ -1,0 +1,51 @@
+# Continuous integration for fax-trident.
+#
+# Pins the toolchain to JDK 21 (the same version the Dockerfile builds with
+# and that pom.xml declares via <java.version>21</java.version>). Without
+# this, contributors on different local JDKs could ship code that compiles
+# locally but breaks the prod build — Spring Boot 3.x is JDK 17+, and the
+# project uses pattern matching `instanceof` that requires 16+ at minimum.
+#
+# Closes the audit's "Pin Java 21 LTS in CI" tech-debt item.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & test (JDK 21)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Verify (compile + test)
+        # Use a non-empty JWT_SECRET so SecurityConfig's fail-fast doesn't
+        # trip during Spring context startup in integration tests. Any value
+        # ≥32 bytes works here — this is CI, not production.
+        env:
+          JWT_SECRET: ci-only-not-a-real-secret-padding-padding-padding
+        run: mvn --batch-mode --no-transfer-progress verify
+
+      - name: Upload surefire reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7

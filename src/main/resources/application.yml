@@ -1,0 +1,87 @@
+# ====================== JWT ======================
+# `jwt.secret` MUST be supplied via environment (JWT_SECRET) or an external
+# config source. No default is provided on purpose — the application will
+# fail at startup with a clear error if it is missing or shorter than 32
+# bytes (HS256 minimum). Generate one with:  openssl rand -base64 48
+#
+# For local development you can set JWT_SECRET in your shell, e.g.:
+#   export JWT_SECRET="$(openssl rand -base64 48)"
+jwt:
+  # secret: <REQUIRED — inject via JWT_SECRET env var>
+  validity: 3600000   # token lifetime in ms (1h)
+
+spring:
+  application:
+    name: fax-trident
+
+  servlet:
+    multipart:
+      # Cap on a single uploaded file. Keep in sync with
+      # FaxUploadService.MAX_UPLOAD_BYTES — they enforce the same limit at
+      # two layers (servlet container reject vs. service-level reject).
+      max-file-size: 25MB
+      max-request-size: 30MB
+
+  # ====================== DATABASE (H2 - dev default) ======================
+  # H2 in-memory for dev. Production overrides live in application-prod.yml
+  # (activated by SPRING_PROFILES_ACTIVE=prod).
+  datasource:
+    url: jdbc:h2:mem:fxdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      # `update` is fine in dev (the schema is recreated every JVM start
+      # since the URL above is in-memory). Production OVERRIDES this to
+      # `validate` in application-prod.yml — schema changes there should go
+      # through Flyway/Liquibase, not Hibernate auto-update (audit 2.21).
+      ddl-auto: update
+    # Verbose SQL logging is useful during dev work. application-prod.yml
+    # turns both flags off.
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.H2Dialect
+
+  # ====================== Redis ======================
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 2000ms
+      database: 0
+
+# ====================== App-specific config ======================
+app:
+  # Server-controlled directory where uploaded fax files are stored. Operators
+  # should override this to an absolute path in production so the location is
+  # unambiguous regardless of the JVM working directory.
+  upload:
+    dir: ./uploads/
+
+  websocket:
+    # Comma-separated list of origins allowed to open the WebSocket. The dev
+    # default here is fine for local work; the prod profile REQUIRES this
+    # property to be set explicitly (see WebSocketConfig#resolveAllowedOrigins
+    # — startup fails fast if it's missing in prod). Example for prod:
+    #   app.websocket.allowed-origins=https://app.example.com,https://admin.example.com
+    allowed-origins: http://localhost:8080
+
+# Production datasource (PostgreSQL) lives in application-prod.yml, activated
+# by SPRING_PROFILES_ACTIVE=prod. The commented block that used to live here
+# was moved out as part of finishing audit 2.21.
+
+# ====================== OAuth2 (optional) ======================
+# Google OAuth2 login is OPT-IN. Both properties below must be set together;
+# setting only one fails fast at startup. Leaving both unset disables OAuth
+# cleanly — form login + JWT bearer auth remain available. Inject via env:
+#   OAUTH2_GOOGLE_CLIENT_ID, OAUTH2_GOOGLE_CLIENT_SECRET
+# No placeholder defaults — the previous "your-client-id" / "your-client-secret"
+# defaults caused the server to attempt real Google handshakes with garbage.
+# oauth2:
+#   google:
+#     client-id: <required to enable OAuth>
+#     client-secret: <required to enable OAuth>

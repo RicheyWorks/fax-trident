@@ -1,0 +1,34 @@
+# ====================== Production profile overrides ======================
+# Active when SPRING_PROFILES_ACTIVE=prod (the Dockerfile sets this by default).
+# This file ONLY overrides keys whose dev defaults are unsafe for production —
+# everything else inherits from application.yml.
+#
+# Closes audit finding 2.21 (yml hygiene): in dev we want ddl-auto=update and
+# verbose SQL logging; in prod neither is acceptable (schema drift on boot,
+# query-log noise, possible PII leak through the logs).
+
+spring:
+  jpa:
+    hibernate:
+      # `validate` checks the live schema against the entity mappings at
+      # startup and fails fast on mismatch. Production schema changes should
+      # go through a migration tool (Flyway/Liquibase), NOT Hibernate
+      # auto-update.
+      ddl-auto: validate
+    # SQL logging adds latency and is noisy under load. Re-enable only when
+    # diagnosing a specific query problem.
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+  # ====================== DATABASE (PostgreSQL) ======================
+  # Uncomment when promoting to a real Postgres deployment. URL, username,
+  # and password must come from the environment (Dockerfile + secrets), not
+  # be committed here.
+  #
+  # datasource:
+  #   url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://db:5432/faxtrident}
+  #   username: ${SPRING_DATASOURCE_USERNAME:trident}
+  #   password: ${SPRING_DATASOURCE_PASSWORD}      # REQUIRED — no default
+  #   driver-class-name: org.postgresql.Driver

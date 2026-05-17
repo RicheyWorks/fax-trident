@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Fax Trident Login</title>
+    <link rel="stylesheet" href="/static/css/mermaid-mode.css">
+</head>
+<body class="root">
+    <div style="text-align: center; padding: 50px;">
+        <h1>Fax Trident - Login</h1>
+        <form method="post" action="/login">
+            <!--
+                Hidden CSRF token. Required because /login is a POST that
+                Spring Security protects with CSRF in our hybrid auth setup.
+                The previous static login.html had no token field, so every
+                real login attempt was being rejected with 403 before the
+                credentials were even checked.
+            -->
+            <input type="hidden"
+                   th:name="${_csrf.parameterName}"
+                   th:value="${_csrf.token}" />
+
+            <div style="margin: 20px;">
+                <input type="text" name="username" placeholder="Username" style="padding: 10px; width: 200px;" />
+            </div>
+            <div style="margin: 20px;">
+                <input type="password" name="password" placeholder="Password" style="padding: 10px; width: 200px;" />
+            </div>
+            <div style="margin: 20px;">
+                <button type="submit" class="button">Login</button>
+            </div>
+            <div>
+                <a href="/oauth2/authorization/google" class="button">Login with Google</a>
+            </div>
+            <div th:if="${param.error}" style="color: red;">Invalid username or password</div>
+            <div th:if="${param.logout}" style="color: green;">Logged out successfully</div>
+            <div th:if="${param.expired}" style="color: orange;">Session expired — please log in again</div>
+        </form>
+    </div>
+</body>
+</html>
