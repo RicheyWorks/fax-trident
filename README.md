@@ -320,9 +320,18 @@ Empty pages return **200 with empty content**, not 404 — 404 is reserved for "
 mvn test
 ```
 
-`FaxEngineServiceTest` is the existing service test. It uses its own `TestConfig` rather than loading the full app, so `SecurityConfig` isn't instantiated, the UI beans (including `FaxUpdateClient`) don't try to open WebSocket connections, and Flyway doesn't auto-trigger — the test gets `hibernate.hbm2ddl.auto: create-drop` against its own in-memory H2.
+Current test surface (24 tests across 6 classes, server module; last green `mvn test` 2026-05-18):
 
-There's plenty of room for more tests. `AUDIT.md` §4 sketches a layered plan: `@WebMvcTest` slices for controllers, `@DataJpaTest` for the repository JPQL, `MockMvc` security tests (anonymous → 401, USER hitting `/admin/**` → 403, forged JWT → 401), and Testcontainers for an integration pass against real Postgres and Redis.
+| Class | Style | What it proves |
+|---|---|---|
+| `FaxEngineServiceTest` | `@SpringBootTest` with a minimal `TestConfig` | Happy-path service behavior — send-fax, process-input, save-contact, inbound-listener wiring. |
+| `SchemaMigrationTest` | `@DataJpaTest` + H2 in PostgreSQL mode, Flyway V1 applied | Entity ↔ migration drift; catches the kind of issue audit 3.1b was. |
+| `AuthControllerTest` | `@WebMvcTest` slice | `POST /api/auth/login` — happy path, bad creds → 401, validation failures → 400. |
+| `AdminControllerTest` | `@WebMvcTest` slice | Role gating on `/api/admin/**` — anonymous→401, USER→403, ADMIN→200. |
+| `FaxControllerTest` | `@WebMvcTest` slice | `/api/fax/**` happy paths + audit-regression checks (1.5 upload, 2.16 empty-page-not-404). |
+| `JwtSecurityIntegrationTest` | Minimal `@SpringBootTest` (no DB / Redis / Flyway autoconfig) | End-to-end JWT filter behavior — missing header, valid token, revoked jti (1.6), forged signature (1.1), expired token. |
+
+`AUDIT.md` §4 has the remaining test plan: repository slice tests per `@Query`, unit tests for `JwtTokenProvider` and `PdfProcessingService`, Testcontainers integration against real Postgres + Redis, a deterministic replacement for the flaky `testListenForInboundFax`, and TestFX coverage for the desktop module.
 
 ### Adding an endpoint
 
@@ -386,21 +395,6 @@ Forward-looking work the audit identified but didn't itself cover:
 
 ---
 
-## Files pending manual cleanup
+## History
 
-These artifacts were neutralized in-place (sandbox can't unlink). All are unreachable from runtime; safe to remove from the working tree at any time. The 2026-05-18 ADR-0001 split collected them all under `_DEAD_CODE_OPERATOR_DELETE_PLEASE/` to keep the new module trees clean:
-
-```sh
-# All of these are tombstones — empty class bodies, deprecation comments.
-rm -rf _DEAD_CODE_OPERATOR_DELETE_PLEASE/
-# Also the agent's sandbox-probe leftovers from the same change:
-rm -rf _AGENT_PROBE_CLEANUP_PLEASE/
-```
-
-Contents:
-
-- `_DEAD_CODE_OPERATOR_DELETE_PLEASE/old_root/FaxTridentApplication.java` (replaced by `fax-trident-server/.../FaxTridentServer.java` and `fax-trident-desktop/.../FaxTridentDesktop.java`)
-- `_DEAD_CODE_OPERATOR_DELETE_PLEASE/service/SmartAssistService.java` (renamed → `ContactSuggestionService`)
-- `_DEAD_CODE_OPERATOR_DELETE_PLEASE/controller/LoginController.java` (form login removed)
-- `_DEAD_CODE_OPERATOR_DELETE_PLEASE/templates/login.html` (form login removed)
-- `_DEAD_CODE_OPERATOR_DELETE_PLEASE/empty_src_tree/` (the old top-level `src/` directory; empty after all files moved)
+The 2026-05-18 ADR-0001 split (commit `a4b8faa`) was the last large structural change. Before that, the codebase was a single Maven module that ran the Spring Boot server and the JavaFX desktop UI in one JVM. See `docs/adr/0001-decouple-javafx-from-spring-boot.md` for the rationale and `AUDIT.md` for the full audit trail.

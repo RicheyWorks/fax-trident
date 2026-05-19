@@ -145,6 +145,18 @@
                 </exclusion>
             </exclusions>
         </dependency>
+        <!--
+            spring-security-test ships @WithMockUser / @WithAnonymousUser and
+            the MockMvc request post-processors (e.g. csrf(), jwt()) that the
+            controller-slice and JWT integration tests use. It is NOT pulled
+            in by spring-boot-starter-security; it's a separate test-scoped
+            dep. Without it, the test sources won't compile.
+        -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>

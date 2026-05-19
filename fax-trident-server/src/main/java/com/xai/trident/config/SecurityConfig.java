@@ -75,6 +75,15 @@ import java.util.concurrent.TimeUnit;
  */
 @Configuration
 @EnableWebSecurity
+// @EnableMethodSecurity activates @PreAuthorize on controllers (e.g.
+// FaxController's hasRole('USER') and AdminController's hasRole('ADMIN')).
+// Without this, those annotations are inert and the only access control
+// is the URL-pattern matching below — which catches the same cases today
+// but is redundant with the controller-level intent. Keep both: the URL
+// pattern is the belt, @PreAuthorize is the braces. If a future endpoint
+// is registered under a path the matcher doesn't cover, the controller
+// annotation still gates access.
+@org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity
 public class SecurityConfig {
 
     private static final Logger logger = LoggerFactory.getLogger(SecurityConfig.class);
@@ -405,12 +414,20 @@ public class SecurityConfig {
                         String username = jwtTokenProvider.getUsername(token);
                         List<String> roles = jwtTokenProvider.getRoles(token);
 
+                        // The JWT's `roles` claim is built by AuthController
+                        // from authentication.getAuthorities().getAuthority(),
+                        // so it carries the full role string ("ROLE_USER",
+                        // "ROLE_ADMIN", ...). Use .authorities(...) which
+                        // accepts those verbatim — NOT .roles(...), which
+                        // expects the bare role name and rejects strings
+                        // that start with "ROLE_" ("ROLE_USER cannot start
+                        // with ROLE_"). Surfaced by JwtSecurityIntegrationTest.
                         org.springframework.security.core.userdetails.User userDetails =
                                 (org.springframework.security.core.userdetails.User)
                                         org.springframework.security.core.userdetails.User.builder()
                                                 .username(username)
                                                 .password("")
-                                                .roles(roles.toArray(new String[0]))
+                                                .authorities(roles.toArray(new String[0]))
                                                 .build();
 
                         org.springframework.security.core.Authentication auth =
