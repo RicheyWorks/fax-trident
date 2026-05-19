@@ -1,8 +1,8 @@
 # Fax Trident
 
-Spring Boot REST + WebSocket fax server with a JavaFX desktop client in the same JVM. JWT + form-login + optional Google OAuth2, Redis-backed rate limiting and a JTI allowlist for logout-aware tokens, PDFBox for PDF text extraction and ZXing for barcode generation, and a get-or-create contact model that survives concurrent unique-constraint races.
+Spring Boot REST + WebSocket fax server and a JavaFX desktop client, in two Maven modules sharing a parent reactor (see `docs/adr/0001-decouple-javafx-from-spring-boot.md`). The desktop is Spring-free and talks to the server via the same REST + WebSocket surface any other client uses. Stateless JWT auth with a Redis-backed JTI allowlist for logout-aware tokens, Redis-backed rate limiting (per-user for authenticated endpoints, per-IP for login), Flyway-managed schema, PDFBox for PDF text extraction and ZXing for barcode generation, and a get-or-create contact model that survives concurrent unique-constraint races.
 
-This README is meant for both operators (who want it deployed) and developers (who want to extend it). The quickstart is up front; the architecture and developer notes follow.
+This README is meant for both operators (who want it deployed) and developers (who want to extend it). The quickstart is up front; architecture and developer notes follow.
 
 ---
 
@@ -10,9 +10,9 @@ This README is meant for both operators (who want it deployed) and developers (w
 
 ### Prerequisites
 
-- **JDK 21** (the project pins `java.version = 21`).
+- **JDK 21** (`<java.version>21</java.version>` in `pom.xml`).
 - **Maven 3.9+**.
-- **Redis 6+** reachable on `localhost:6379` for local dev. Used for the JWT JTI allowlist, the rate-limit counters, the prediction cache, and the per-fax status keys.
+- **Redis 6+** reachable on `localhost:6379` for local dev. Used for the JWT JTI allowlist, rate-limit counters, suggestion cache, and per-fax status keys.
 - **PostgreSQL** for production. Dev runs on in-memory H2 so you can skip this until you switch profiles.
 
 ### Required environment
@@ -25,12 +25,42 @@ export JWT_SECRET="$(openssl rand -base64 48)"      # >= 32 bytes required for H
 
 ### Build and run (dev)
 
+The repo is a Maven reactor with two modules:
+
+| Module | Artifact | Purpose |
+|---|---|---|
+| `fax-trident-server` | `fax-trident-1.0.0-SNAPSHOT.jar` (Spring Boot fat jar) | REST + WebSocket service. |
+| `fax-trident-desktop` | `fax-trident-desktop-1.0.0-SNAPSHOT.jar` | JavaFX client. Talks to the server over HTTP + WS. Spring-free. |
+
+To build everything from the repo root:
+
 ```sh
 mvn clean package
-java -jar target/fax-trident-1.0.0-SNAPSHOT.jar
 ```
 
-The server listens on `:8080`. The JavaFX desktop client opens at the same time — they run in one process and share the Spring context. If you only want the server (e.g. inside a container), set `java.awt.headless=true`; the desktop UI will fail to initialize cleanly and the server keeps running.
+Then run the server:
+
+```sh
+java -jar fax-trident-server/target/fax-trident-1.0.0-SNAPSHOT.jar
+```
+
+The server listens on `:8080`. Flyway runs `db/migration/V1__initial_schema.sql` against the in-memory H2 on startup, then Hibernate validates the schema against the entity model. Server-only deploys (Docker, k8s) do not pull in JavaFX at all — the server module declares no openjfx dependency.
+
+In a second terminal, run the desktop client:
+
+```sh
+mvn -pl fax-trident-desktop javafx:run
+# or
+java -jar fax-trident-desktop/target/fax-trident-desktop-1.0.0-SNAPSHOT.jar
+```
+
+A login dialog appears first. Enter the server URL (default `http://localhost:8080`), username, and password — on success the client mints a JWT via `POST /api/auth/login` and the main view opens. Per-machine preferences (server URL, last username, theme) are persisted under `${user.home}/.fax-trident/preferences.properties`.
+
+To build only the server (no JavaFX deps fetched):
+
+```sh
+mvn -pl fax-trident-server -am package
+```
 
 ### Build and run (production profile)
 
@@ -45,11 +75,11 @@ app_websocket_allowed-origins=https://app.example.com \
 java -jar target/fax-trident-1.0.0-SNAPSHOT.jar
 ```
 
-`application-prod.yml` overrides `spring.jpa.hibernate.ddl-auto` to `validate` and turns off SQL logging — production schema changes should go through Flyway / Liquibase, not Hibernate auto-update.
+`application-prod.yml` overrides `show-sql` and `format_sql` to `false`. `ddl-auto: validate` lives in `application.yml` (not the prod overlay) because Flyway owns the schema in every environment now — Hibernate just checks the entity model matches what Flyway has applied. For existing prod databases that pre-date the Flyway adoption, `spring.flyway.baseline-on-migrate: true` inserts a baseline row at V1 on first startup and skips `V1__initial_schema.sql`.
 
 ### Docker
 
-The included `Dockerfile` builds a multi-stage image and sets `SPRING_PROFILES_ACTIVE=prod` by default. No secrets are baked into the image — inject them at runtime:
+The included `Dockerfile` is multi-stage (Maven build, JRE runtime) and sets `SPRING_PROFILES_ACTIVE=prod` by default. The runtime base image is `eclipse-temurin:21-jre-jammy` — Ubuntu rather than Alpine because PDFBox needs fontconfig + a baseline of system fonts to render reliably. No secrets are baked into the image — inject at runtime:
 
 ```sh
 docker build -t fax-trident .
@@ -67,111 +97,179 @@ docker run \
 | Property / Env var | Required | Default | Notes |
 |---|---|---|---|
 | `jwt.secret` / `JWT_SECRET` | yes | — (fail-fast) | HS256 signing key, ≥ 32 bytes. `openssl rand -base64 48`. |
-| `jwt.validity` | no | `3600000` (1h) | Token TTL in ms. Same TTL is applied to the JTI allowlist entry. |
-| `spring.datasource.*` | dev: no, prod: yes | H2 in-memory | Move to Postgres in prod via `application-prod.yml` or env. |
+| `jwt.validity` | no | `3600000` (1h) | Token TTL in ms. Same TTL applied to the JTI allowlist entry. |
+| `spring.datasource.*` | dev: no, prod: yes | H2 in-memory | Move to Postgres in prod via env (`SPRING_DATASOURCE_URL`, etc.). |
 | `spring.data.redis.host` / `SPRING_DATA_REDIS_HOST` | no | `localhost` | Same for `port`, `timeout`, `database`. |
+| `spring.flyway.*` | no | enabled, baseline-on-migrate, baseline-version=1 | See [`application.yml`](src/main/resources/application.yml). Migrations live in `src/main/resources/db/migration/`. |
 | `app.upload.dir` | no | `./uploads/` | Server-controlled directory for uploaded fax PDFs. Set to an **absolute path** in production. |
 | `app.websocket.allowed-origins` | dev: no, prod: yes | `http://localhost:8080` (dev only) | Comma-separated. Prod profile fails fast if unset. |
 | `app.websocket.client-url` | no | `ws://localhost:8080/fax-updates` | URL the desktop client connects to. |
-| `oauth2.google.client-id` / `OAUTH2_GOOGLE_CLIENT_ID` | no | unset (OAuth disabled) | Both client-id and client-secret must be set together; setting only one fails fast. |
-| `oauth2.google.client-secret` / `OAUTH2_GOOGLE_CLIENT_SECRET` | no | unset | See above. |
-| `app.sound.startup` | no | `/sounds/trident-rise.wav` | Played on JavaFX boot. The shipped wav is a 3-byte placeholder — drop in a real one when you have one. |
+| `server.forward-headers-strategy` | no | unset | Set to `native` (or `framework`) when behind a trusted reverse proxy so per-IP rate limiting on `/api/auth/login` keys on the real client, not the proxy. |
+| `app.sound.startup` | no | `/sounds/trident-rise.wav` | Played on JavaFX boot. Shipped wav is a 3-byte placeholder. |
 
 ---
 
 ## Architecture
 
 ```
-+---------------------------- one JVM ----------------------------+
-|                                                                 |
-|  +---------- JavaFX desktop UI ----------+                      |
-|  |  MainView -+                          |                      |
-|  |            +-> FaxUpdateClient -------+----- WebSocket --+   |
-|  |  PreviewPane                          |                  |   |
-|  |  ThemeManager                         |                  |   |
-|  +-----------------|---------------------+                  |   |
-|                    |                                        |   |
-|                    v (FaxEngineService etc.)                |   |
-|                                                             |   |
-|  +-------------- Spring Boot REST ---------------+          |   |
-|  |  FaxController, AdminController, LoginController         |   |
-|  |  FaxEngineService, SmartAssistService, FaxUploadService  |   |
-|  |  PdfProcessingService, RateLimitAspect                   |   |
-|  |  SecurityConfig (JWT + form login + OAuth2)              |   |
-|  +----+-----------+-----------+-----------+-----------+-----+   |
-|       |           |           |           |           |         |
-|       v           v           v           v           v         |
-|     JPA        Redis     WebSocket    PDFBox       ZXing        |
-|   (H2/PG)   (Lettuce)   (server)                                |
-|                                                                 |
-+-----------------------------------------------------------------+
++----- fax-trident-desktop JVM ------+        +----- fax-trident-server JVM -----+
+|                                    |        |                                  |
+|  FaxTridentDesktop (JavaFX main)   |        |  FaxTridentServer (Spring Boot)  |
+|       │                            |        |                                  |
+|       ├─ LoginDialog ──────────────+──HTTP──+→  POST /api/auth/login → JWT     |
+|       │                            |        |                                  |
+|       ├─ FaxApiClient ─────────────+──HTTP──+→  /api/fax/uploads (multipart)   |
+|       │   (JDK java.net.http)      |        |    /api/fax/send                 |
+|       │                            |        |    (bearer JWT on every call)    |
+|       │                            |        |                                  |
+|       ├─ FaxUpdateClient ──────────+──WS────+→  /fax-updates broadcast         |
+|       │   (org.java-websocket)     |        |                                  |
+|       │                            |        |  AuthController, FaxController,  |
+|       ├─ MainView                  |        |  AdminController                 |
+|       ├─ PreviewPane (PDFBox)      |        |  FaxEngineService                |
+|       ├─ ThemeManager              |        |  ContactSuggestionService        |
+|       └─ DesktopPreferences        |        |  FaxUploadService                |
+|         (~/.fax-trident/...)       |        |  PdfProcessingService            |
+|                                    |        |  RateLimitAspect                 |
+|  No Spring on this side.           |        |  SecurityConfig (stateless JWT)  |
+|                                    |        |    │       │       │       │     |
++------------------------------------+        |    v       v       v       v     |
+                                              |   JPA    Redis    WS    PDFBox/  |
+                                              |  (Flyway- (Lettuce)     ZXing    |
+                                              |   managed)                       |
+                                              +----------------------------------+
 ```
 
-The desktop UI and the server share a Spring `ApplicationContext`. JavaFX's `Application.launch()` instantiates `FaxTridentApplication` itself via reflection, so `init()` explicitly calls `springContext.getAutowireCapableBeanFactory().autowireBean(this)` to populate the JavaFX-managed instance's `@Autowired` fields — without that, the `start(Stage)` defensive null checks would trip every boot.
+The desktop and the server are independent processes. Previously they shared one JVM and the desktop UI `@Autowired` server beans directly; that coupling was removed in ADR-0001 (`docs/adr/0001-decouple-javafx-from-spring-boot.md`). The desktop now authenticates over `POST /api/auth/login` and treats the server like any other API consumer.
 
-The desktop client talks to the server over an internal WebSocket (`/fax-updates`), not direct service calls. `FaxUpdateClient` is the single shared subscriber for `MainView` and `PreviewPane`; it connects on `ApplicationReadyEvent` (after Tomcat begins accepting upgrades) and reconnects with exponential backoff.
+The WebSocket client (`FaxUpdateClient`) is owned by the desktop. Lifecycle is explicit — created by `FaxTridentDesktop.start(Stage)` after login succeeds, closed by `FaxTridentDesktop.stop()`. Reconnect uses exponential backoff capped at 30s.
+
+The PDF preview pane (`PreviewPane`) still uses PDFBox, but locally on the desktop's own copy of the file — no network call. After upload + send succeed, status updates come back via the WebSocket broadcast.
 
 ### Auth model
 
-Hybrid — both surfaces work, and CSRF is enforced selectively:
+Stateless JWT only. There is one path in and one path out.
 
-- **Browser flow**: form login at `/login` (Thymeleaf-rendered to carry a `_csrf` token) issues a session cookie **and** returns a JWT in the `Authorization` response header. CSRF is enforced on every state-changing `/api/**` call that does **not** present a `Bearer` token.
-- **Programmatic flow**: clients call `POST /login` once or use OAuth2, store the JWT, and send `Authorization: Bearer ...` on subsequent calls. The Bearer header tells the CSRF matcher to skip; the JWT filter rejects forged tokens downstream.
-- **Logout**: revokes the JWT's `jti` from the Redis allowlist. The session cookie is invalidated too. Further use of the token returns 401.
+- **Login**: `POST /api/auth/login` with `{"username":"...","password":"..."}` returns `{"token":"..."}`. The endpoint is rate-limited per client IP (10/min) so brute-force scripts get 429s after the first 10 misses.
+- **Authenticated calls**: every protected endpoint expects `Authorization: Bearer <token>`. The JWT filter validates the signature, looks up the `jti` in the Redis allowlist, and populates `SecurityContext`. A revoked or expired `jti` is rejected even if the signature is valid.
+- **Logout**: `POST /logout` with the same `Authorization` header removes the `jti` from Redis. Subsequent uses of the token return 401.
+
+No HTTP sessions, no `JSESSIONID`, no CSRF filter, no form-login page. CSRF doesn't apply because there's no ambient cookie for an attacker to ride — JWTs travel only in the `Authorization` header, which a cross-site form can't set.
+
+If you reintroduce OAuth2 later, it should mint a JWT on the OAuth callback rather than create a session, to keep the model uniform.
 
 ### Rate limiting
 
-`@RateLimit(key = "fax:send:#{authentication.name}", rate = 10, period = 60)` on the controller method. `RateLimitAspect` is a Spring AOP `@Around` that uses a Redis fixed-window counter — at-most-`rate` calls per `period` seconds per resolved SpEL key. Exceeded calls throw `RateLimitExceededException` which maps to HTTP 429.
+`@RateLimit(key = "...", rate = N, period = SECONDS)` on any controller method. `RateLimitAspect` is a Spring AOP `@Around` that uses a Redis fixed-window counter — at-most-`rate` calls per `period` seconds per resolved SpEL key. Exceeded calls throw `RateLimitExceededException`, which Spring maps to HTTP 429.
+
+SpEL variables available in the key template:
+
+- `#authentication` — the current Spring Security `Authentication`. Null for unauthenticated callers.
+- `#request` — the current `HttpServletRequest`.
+- `#ipAddress` — convenience for `request.getRemoteAddr()`. Use for unauthenticated endpoints; combine with `server.forward-headers-strategy: native` if behind a reverse proxy.
+- Any controller-method parameter, by name.
+
+Two patterns:
+
+```java
+// Authenticated, per-user
+@RateLimit(key = "fax:send:#{authentication.name}", rate = 10, period = 60)
+public ResponseEntity<?> send(...) { ... }
+
+// Unauthenticated, per-IP (brute-force protection)
+@RateLimit(key = "auth:login:#{#ipAddress}", rate = 10, period = 60)
+public ResponseEntity<?> login(...) { ... }
+```
+
+### Schema migrations
+
+Flyway owns the schema. `src/main/resources/db/migration/V1__initial_schema.sql` is the baseline; new changes go in `V2__<desc>.sql`, `V3__<desc>.sql`, etc. Both dev (H2) and prod (Postgres) run the same migrations on boot, then Hibernate validates the entity model against the resulting schema. Drift fails fast at startup instead of silently mis-applying writes.
+
+For existing prod databases that pre-date Flyway, `spring.flyway.baseline-on-migrate: true` inserts a baseline row at V1 and skips `V1__initial_schema.sql` — V2+ run normally.
 
 ---
 
 ## Project layout
 
 ```
-src/main/java/com/xai/trident
-├── FaxTridentApplication.java   JavaFX + Spring Boot entrypoint
-├── config/
-│   ├── SecurityConfig.java      JWT + form + OAuth2; CSRF matcher; logout handler
-│   ├── RedisConfig.java         Pub/sub + RedisTemplate beans
-│   ├── WebSocketConfig.java     /fax-updates handler; @Scheduled session cleanup
-│   └── AsyncConfig.java         DelegatingSecurityContextAsyncTaskExecutor
-├── controller/
-│   ├── FaxController.java       /api/fax/**
-│   ├── AdminController.java     /api/admin/**
-│   └── LoginController.java     GET /login (Thymeleaf)
-├── service/
-│   ├── FaxEngineService.java    sendFax, processInput, findOrCreateContact
-│   ├── PdfProcessingService.java text extraction + QR barcode generation
-│   ├── SmartAssistService.java  contact prediction + auto-send
-│   └── InboundFaxSimulator.java @Profile("dev") @Scheduled trigger
-├── upload/
-│   ├── FaxUploadService.java    multipart store, UUID + chroot resolve
-│   └── UploadExceptionHandler.java 400 / 404 / 413 mapping
-├── ratelimit/
-│   ├── RateLimit.java           the @interface
-│   └── RateLimitAspect.java     @Around advice, Redis fixed-window
-├── model/
-│   ├── Contact.java, FaxLog.java, FaxMetadata.java
-│   └── User.java                Spring Security user record
-├── repository/
-│   ├── ContactRepository.java   incl. findByFaxNumberContaining for SmartAssist
-│   ├── FaxLogRepository.java    incl. countByFaxNumber
-│   ├── FaxMetadataRepository.java incl. findTotalPageCount / findTotalFileSize
-│   └── UserRepository.java
-├── ui/
-│   ├── MainView.java            JavaFX BorderPane, programmatic build
-│   ├── PreviewPane.java         PDF rendering with @Retryable + @Recover
-│   ├── ThemeManager.java        Mermaid / dark themes
-│   └── FaxUpdateClient.java     single shared WS client + listener registry
-└── util/
-    └── LogSanitizer.java        CR/LF/TAB escape for log lines
+pom.xml                                 parent reactor (packaging=pom)
+docs/adr/
+└── 0001-decouple-javafx-from-spring-boot.md   the split decision
+
+fax-trident-server/
+├── pom.xml
+└── src/main/java/com/xai/trident
+    ├── FaxTridentServer.java          Spring Boot entrypoint (no JavaFX)
+    ├── config/
+    │   ├── SecurityConfig.java        Stateless JWT, JWT filter + provider, role mapping
+    │   ├── RedisConfig.java           RedisTemplate beans
+    │   ├── WebSocketConfig.java       /fax-updates handler
+    │   └── AsyncConfig.java           DelegatingSecurityContextAsyncTaskExecutor
+    ├── controller/
+    │   ├── AuthController.java        POST /api/auth/login (per-IP rate-limited)
+    │   ├── FaxController.java         /api/fax/**
+    │   └── AdminController.java       /api/admin/**
+    ├── service/
+    │   ├── FaxEngineService.java          sendFax, processInput, findOrCreateContact
+    │   ├── PdfProcessingService.java      text extraction + QR barcode generation
+    │   ├── ContactSuggestionService.java  heuristic contact suggestion + auto-send
+    │   └── InboundFaxSimulator.java       @Profile("dev") @Scheduled trigger
+    ├── upload/
+    │   ├── FaxUploadService.java          multipart store, UUID + chroot resolve
+    │   └── UploadExceptionHandler.java    400 / 404 / 413 mapping
+    ├── ratelimit/
+    │   ├── RateLimit.java                 the @interface
+    │   └── RateLimitAspect.java           @Around advice; #authentication, #request, #ipAddress
+    ├── model/
+    │   ├── Contact.java, FaxLog.java, FaxMetadata.java
+    │   └── User.java                      Spring Security user record
+    ├── repository/
+    │   ├── ContactRepository.java         incl. findByFaxNumberContaining for ContactSuggestion
+    │   ├── FaxLogRepository.java          incl. countByFaxNumber
+    │   ├── FaxMetadataRepository.java     incl. findTotalPageCount / findTotalFileSize
+    │   └── UserRepository.java
+    └── util/
+        └── LogSanitizer.java              CR/LF/TAB escape for log lines
+
+fax-trident-server/src/main/resources
+├── application.yml                    dev defaults; jwt, datasource, jpa, flyway, redis, app
+├── application-prod.yml               prod overrides (SQL logging off)
+└── db/migration/
+    └── V1__initial_schema.sql         Flyway baseline
+
+fax-trident-desktop/
+├── pom.xml
+└── src/main/java/com/xai/trident/desktop
+    ├── FaxTridentDesktop.java         JavaFX main; wires up the client manually (no Spring)
+    ├── client/
+    │   ├── FaxApiClient.java          REST client around java.net.http.HttpClient
+    │   └── RetryHelper.java           replaces Spring Retry's @Retryable on the desktop side
+    ├── config/
+    │   └── DesktopPreferences.java    ~/.fax-trident/preferences.properties (replaces Redis-backed theme)
+    └── ui/
+        ├── LoginDialog.java           credentials prompt; calls FaxApiClient.login
+        ├── MainView.java              BorderPane; send-fax via FaxApiClient (upload + send)
+        ├── PreviewPane.java           PDF rendering with explicit retry on a background executor
+        ├── ThemeManager.java          mermaid / dark themes; persists via DesktopPreferences
+        └── FaxUpdateClient.java       single shared WS client + listener registry
+
+fax-trident-desktop/src/main/resources
+├── css/                               mermaid-mode.css, dark-mode.css
+└── sounds/                            startup + status sound placeholders
 ```
 
 ---
 
 ## API surface
 
-All `/api/**` requires authentication. `/api/fax/**` is `ROLE_USER`; `/api/admin/**` is `ROLE_ADMIN`.
+All `/api/**` endpoints require `Authorization: Bearer <token>`. `/api/fax/**` requires `ROLE_USER`; `/api/admin/**` requires `ROLE_ADMIN`.
+
+### Auth
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/auth/login` | `{username, password}` → `{token}`. Rate-limited 10/min per IP. Returns 401 on bad credentials, 429 on exceeded rate. |
+| POST | `/logout` | With bearer header → revokes the JWT's `jti`. Returns 204. |
 
 ### Fax
 
@@ -180,12 +278,12 @@ All `/api/**` requires authentication. `/api/fax/**` is `ROLE_USER`; `/api/admin
 | POST | `/api/fax/uploads` | multipart upload → returns `uploadId`. 25 MiB cap. |
 | POST | `/api/fax/send` | `{faxNumber, uploadId}` → async send. Rate-limited 10/min/user. |
 | POST | `/api/fax/process-input` | `?uploadId=...` → extract text. |
-| POST | `/api/fax/auto-send` | `?partialInput=...&uploadId=...` → predict contact and send. Rate-limited 5/min/user. |
+| POST | `/api/fax/auto-send` | `?partialInput=...&uploadId=...` → suggest contact and send. Rate-limited 5/min/user. |
 | GET | `/api/fax/status` | Redis ping for liveness. |
 | GET | `/api/fax/status/{faxId}` | Per-fax status from Redis + DB. |
 | GET | `/api/fax/logs/by-number/{faxNumber}` | Paged. |
 | GET | `/api/fax/logs/recent?start=...&end=...` | Time-range. |
-| GET | `/api/fax/predict-contact?partialInput=...` | SmartAssist. |
+| GET | `/api/fax/predict-contact?partialInput=...` | Heuristic suggestion. URL kept for backwards-compat; backend is `ContactSuggestionService`. |
 | GET | `/api/fax/contacts/search?name=...` | Paged. |
 | GET | `/api/fax/metadata/{id}` | Single resource (404 if missing). |
 
@@ -199,19 +297,18 @@ Empty pages return **200 with empty content**, not 404 — 404 is reserved for "
 | POST | `/api/admin/send-fax` | `?faxNumber=...&uploadId=...`. |
 | GET | `/api/admin/fax-status/{faxId}` | Admin-level status view. |
 | DELETE | `/api/admin/clear-cache` | Clears `fax_*` keys via SCAN. |
-| GET | `/api/admin/contacts`, `/contacts/recent` | |
+| GET | `/api/admin/contacts`, `/contacts/recent` | Paged. |
 | GET | `/api/admin/logs/failed`, `/logs/analytics` | |
-| GET | `/api/admin/websocket-stats`, `/fax-stats`, `/pdf-stats`, `/metadata/stats`, `/theme-stats`, `/prediction-analytics` | Diagnostics. |
+| GET | `/api/admin/websocket-stats`, `/fax-stats`, `/pdf-stats`, `/metadata/stats`, `/theme-stats`, `/prediction-analytics` | Diagnostics. `/prediction-analytics` URL retained; SCAN pattern is `suggest:*`. |
 | DELETE | `/api/admin/cleanup-barcodes` | Deletes barcode PNGs in the configured dir. |
 
-### Auth
+### Open (no auth)
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/login` | Thymeleaf-rendered login page with CSRF token. |
-| POST | `/login` | Form login; returns `Authorization: Bearer ...` header + session cookie. |
-| GET | `/oauth2/authorization/google` | Only if OAuth credentials are configured. |
-| POST | `/logout` | Invalidates session and revokes the JWT JTI. |
+| POST | `/api/auth/login` | See above. |
+| POST | `/logout` | See above. |
+| GET | `/actuator/health`, `/actuator/info` | For k8s / Docker probes. |
 
 ---
 
@@ -223,74 +320,87 @@ Empty pages return **200 with empty content**, not 404 — 404 is reserved for "
 mvn test
 ```
 
-`FaxEngineServiceTest` is the existing service test. It uses its own `TestConfig` rather than loading the full app, so `SecurityConfig` isn't instantiated and the UI beans (including `FaxUpdateClient`) don't try to open WebSocket connections.
+`FaxEngineServiceTest` is the existing service test. It uses its own `TestConfig` rather than loading the full app, so `SecurityConfig` isn't instantiated, the UI beans (including `FaxUpdateClient`) don't try to open WebSocket connections, and Flyway doesn't auto-trigger — the test gets `hibernate.hbm2ddl.auto: create-drop` against its own in-memory H2.
 
-There's plenty of room for more tests — the AUDIT recommends `@WebMvcTest` slices for the controllers, `@DataJpaTest` for the repository JPQL, and `MockMvc` security tests for the CSRF / JWT / role matrix.
+There's plenty of room for more tests. `AUDIT.md` §4 sketches a layered plan: `@WebMvcTest` slices for controllers, `@DataJpaTest` for the repository JPQL, `MockMvc` security tests (anonymous → 401, USER hitting `/admin/**` → 403, forged JWT → 401), and Testcontainers for an integration pass against real Postgres and Redis.
 
 ### Adding an endpoint
 
 1. Add the controller method.
-2. If it touches the DB, add `@Transactional(readOnly = true)` or `@Transactional` as appropriate. If it doesn't, leave the annotation off — there's a one-line comment style for documenting "intentionally not transactional" already used through the controllers.
-3. If it's user-mutating, give it a `@RateLimit` and let the AOP aspect handle 429s.
+2. If it touches the DB, add `@Transactional(readOnly = true)` or `@Transactional` as appropriate. If it doesn't, leave the annotation off — there's a one-line comment style for documenting "intentionally not transactional" already used throughout the controllers.
+3. If it's user-mutating or an unauthenticated surface, give it a `@RateLimit` and let the AOP aspect handle 429s.
 4. Sanitize any user-controlled string before logging it through `LogSanitizer.sanitize(...)`.
+
+### Adding a schema change
+
+1. Create `src/main/resources/db/migration/V<n>__<short_description>.sql` (one-up from the highest existing version).
+2. Add / change entity fields to match.
+3. `mvn test` and a local startup verify Flyway applies the migration and Hibernate `validate` is happy.
+4. Production picks up the migration on next deploy — no operator SQL needed.
 
 ### Adding a Redis-backed feature
 
-`RedisConfig` registers `RedisTemplate<String, Object>` and a string serializer for keys. For pattern lookups use `SCAN` via `redisTemplate.scan(...)` inside a try-with-resources — `KEYS` is O(N) and blocks the server.
+`RedisConfig` registers `RedisTemplate<String, Object>` with a string serializer for keys. For pattern lookups use `SCAN` via `redisTemplate.scan(...)` inside a try-with-resources — `KEYS` is O(N) and blocks the server.
 
 ### Profiles
 
-- **default** — dev. H2 in-memory, ddl-auto: update, verbose SQL logging, allowed-origins defaults to `localhost`.
-- **prod** — `application-prod.yml`. ddl-auto: validate, no SQL logging, allowed-origins must be set.
+- **default** — dev. H2 in-memory, Flyway runs against it, allowed-origins defaults to `localhost:8080`, verbose SQL logging.
+- **prod** — `application-prod.yml`. SQL logging off; everything else inherits from the default. `app.websocket.allowed-origins` must be set.
 - **dev** — explicitly activates the `InboundFaxSimulator` `@Scheduled` trigger that fakes inbound faxes. Production never runs it.
 
 ---
 
 ## Hardening summary
 
-The codebase has been through a full security + correctness audit. The major changes the audit produced (all closed; see `AUDIT.md` for the full trail):
+The codebase has been through a full security + correctness audit. The major changes (all closed; see `AUDIT.md` for the full trail):
 
-- **JWT secret is required**. No default. `JWT_SECRET` shorter than 32 bytes fails startup. Tokens carry a `jti` registered in a Redis allowlist with the same TTL — logout revokes the `jti`, so a stolen token's blast radius is bounded by `jwt.validity`. Charset on the secret bytes is now explicit UTF-8.
-- **Real rate limiting**. `@RateLimit` is a working AOP-backed annotation, not the no-op `@interface` it used to be. Redis fixed-window counter; HTTP 429 on excess.
-- **Multipart upload API**. The old `filePath` request parameters that let a caller name any file on the server's disk are gone. `POST /api/fax/uploads` returns an opaque `uploadId`; the server stores the file under `app.upload.dir`, validates PDF magic bytes and size on store, and chroots the resolve on use.
-- **CSRF model**. CSRF is enforced on mutating `/api/**` calls that don't present a Bearer token. The token lives in an `XSRF-TOKEN` cookie (`HttpOnly=false`) for SPA reads. The login form is Thymeleaf-rendered and carries `_csrf`, so default form-login works.
-- **OAuth2 is opt-in**. No placeholder defaults — partial configuration (only id or only secret) fails fast; both unset disables OAuth login cleanly. Login form and JWT still work.
-- **CSRF/Session + Async fixes**. `@Async` flows now propagate the `SecurityContext` via `DelegatingSecurityContextAsyncTaskExecutor`, so audit-trail `createdBy` reflects the actual user. WebSocket allowed-origins is read from `app.websocket.allowed-origins` and the `prod` profile fails fast if unset.
-- **Correct ID generation**. Every `faxId` is a UUID. `System.currentTimeMillis()` IDs no longer collide under concurrency.
-- **Contact get-or-create centralized**. One entry point in `FaxEngineService.findOrCreateContact(...)`. Concurrent unique-constraint races propagate as `DataIntegrityViolationException` and the existing `@Retryable` on `sendFaxAsync` retries.
-- **Aggregations in SQL, not in the JVM**. `findAll().stream().mapToInt(...).sum()` patterns replaced with `SUM` / `COUNT` queries. Smart-assist substring search is paginated and capped, not unbounded.
-- **Resource leaks closed**. `Files.list(...)` sites are all in try-with-resources. Spring Retry chains (`@Retryable` / `@Recover`) actually fire — the old code wrapped checked exceptions as RuntimeException before the proxy could see them.
-- **`Thread.sleep()` inside `@Transactional` removed**. The placeholder sleeps in `processInput` and `sendFax` are gone.
-- **Inbound-fax simulator profile-gated**. `Math.random() > 0.8` no longer manufactures fake contacts in production — the `@Scheduled` trigger is `@Profile("dev")`.
-- **Structural cleanup**. `User` entity moved out of `SecurityConfig` to `model/` + `repository/`. JavaFX FXML+programmatic duel resolved (programmatic UI is the only path now). Single shared `FaxUpdateClient` replaces the two `WebSocketClient`s `MainView` and `PreviewPane` used to spin up.
-- **YAML structure repaired**. `spring.datasource.*` / `spring.jpa.*` / `spring.data.redis.*` were previously nested under `app:` and silently ignored by Spring auto-config; they now live under `spring:` where they belong. Production overrides moved to `application-prod.yml`.
+- **Auth: stateless JWT only.** Form login, sessions, and CSRF are gone. The single entry point is `POST /api/auth/login` (JSON), returning a bearer token. Logout revokes the token's `jti` from the Redis allowlist. The hybrid model the audit found (form + JWT + sessions) created the original CSRF and session findings; eliminating the surface eliminates the class of bug.
+- **JWT secret is required.** No default. Secrets shorter than 32 bytes fail startup. Tokens carry a `jti` registered in Redis with the same TTL — logout revocation is real, not advisory.
+- **Real rate limiting, per-user AND per-IP.** `@RateLimit` is a working AOP-backed annotation, not the no-op `@interface` it used to be. The aspect exposes `#authentication`, `#request`, and `#ipAddress` so both authenticated and anonymous endpoints can throttle. `/api/auth/login` is per-IP-rate-limited as brute-force protection.
+- **Multipart upload API.** Old `filePath` request parameters that let a caller name any file on disk are gone. `POST /api/fax/uploads` returns an opaque `uploadId`; the server stores under `app.upload.dir`, validates PDF magic bytes + size, and chroots the resolve.
+- **Flyway-managed schema.** `V1__initial_schema.sql` baselines the entire current schema. `ddl-auto: validate` in every environment. Schema drift fails fast at startup.
+- **Spring Boot 3.5.14** (was 3.2.4, EOL). Catches CVE-2026-22731 / CVE-2026-22733 (authentication bypass) and the 2025-era Framework CVEs.
+- **`@Async` propagates `SecurityContext`** via `DelegatingSecurityContextAsyncTaskExecutor` — audit-trail `createdBy` reflects the actual user.
+- **UUID fax IDs.** `System.currentTimeMillis()` IDs no longer collide under concurrency.
+- **Contact get-or-create centralized.** One entry point in `FaxEngineService.findOrCreateContact(...)`. Concurrent unique-constraint races propagate as `DataIntegrityViolationException` and the `@Retryable` on `sendFaxAsync` retries.
+- **Aggregations in SQL, not in the JVM.** `findAll().stream().mapToInt(...).sum()` patterns replaced with `SUM` / `COUNT` queries. Contact-suggestion substring search is paginated and capped.
+- **Resource leaks closed.** `Files.list(...)` sites are all in try-with-resources. Spring Retry chains (`@Retryable` / `@Recover`) actually fire — the old code wrapped checked exceptions before the proxy could see them.
+- **Inbound-fax simulator profile-gated.** `Math.random() > 0.8` no longer manufactures fake contacts in production — the `@Scheduled` trigger is `@Profile("dev")`.
+- **Honest naming.** `SmartAssistService` → `ContactSuggestionService`. The class never had a model; the name implied otherwise.
+- **Unique index names.** `idx_fax_number` collided between `contacts` and `fax_logs` (Hibernate/Postgres/H2 use a single global namespace), silently leaving `fax_logs.faxNumber` unindexed. Renamed to `idx_contact_fax_number` on `contacts`.
+- **Structural cleanup.** `User` entity moved from `SecurityConfig` to `model/` + `repository/`. JavaFX FXML+programmatic duel resolved (programmatic-only). Single shared `FaxUpdateClient` replaces two `WebSocketClient`s. `application.yml` `datasource:` / `jpa:` / `data:` moved from `app:` to `spring:` where Spring auto-config actually reads them.
+- **CI on JDK 21** (`.github/workflows/ci.yml`). Dockerfile runtime base is `21-jre-jammy` (was Alpine — musl + missing fontconfig was a silent risk for PDFBox).
+- **`.gitignore`** covers `target/`, IDE folders, `.env*`, `*.pem`/`*.key`, and the runtime `uploads/` / `barcodes/` directories.
 
 ---
 
 ## Known follow-ups
 
-Forward-looking work not covered by the audit:
+Forward-looking work the audit identified but didn't itself cover:
 
-- **Split JavaFX desktop from the server module.** Today they share a JVM and `FaxTridentApplication` plays both roles. Splitting into `fax-trident-server` and `fax-trident-desktop` unblocks headless server deploys and removes the autowire-into-Application dance.
-- **Real ML for SmartAssist.** `predictContact` currently uses a name+number heuristic with a Redis cache. Stub `invokeXaiModel` has been removed; reintroduce it when there's a real model to call.
-- **Flyway / Liquibase migrations.** `ddl-auto` is `validate` in prod, which means schema changes are operator-managed. Adopt a migration tool.
-- **Spring Boot upgrade.** The parent is `3.2.4`. Upgrade to the current `3.x` line for the Spring Framework CVE fixes (CVE-2024-22243, CVE-2024-22257, ...).
-- **Test coverage.** One service test today. The audit's test-strategy section sketches what's missing — controller slices, repository slices, security tests, Testcontainers for an integration pass.
-- **Dockerfile base image.** Runtime is `eclipse-temurin:21-jre-alpine`. Alpine + JDK 21 has a known glibc/musl issue with some native libraries — verify PDFBox renders correctly there, or switch to `21-jre-jammy`.
-
-### Build hygiene (landed 2026-05-16)
-
-- `.gitignore` covers `target/`, IDE folders, `.env*`, `*.pem`/`*.key`, and the runtime `uploads/` / `barcodes/` directories.
-- `pom.xml` no longer pins `slf4j-api`, `logback-classic`, `logback-core`, `jackson-databind` — the Spring Boot BOM owns those versions.
-- `.github/workflows/ci.yml` builds and tests on JDK 21 (Temurin) on every push and PR, exports a CI-only `JWT_SECRET` so context startup doesn't fail, and uploads surefire reports on test failure.
+- **Real ML behind `ContactSuggestionService`.** Today it's a deterministic score-based fuzzy matcher (`history*10 + name_contains*5 + fax_contains*3`). If you have a real model, the `suggestContact(...)` method is the right seam to plug it into — score against both and pick, or replace wholesale.
+- **Single auth schema for roles.** `User.roles` is a comma-separated `VARCHAR`. A join table (`user_roles`) would let you query, index, and constrain roles properly.
+- **Real test suite.** Two server-side tests today (`FaxEngineServiceTest`, `SchemaMigrationTest`). `AUDIT.md` §4 sketches the layered plan (security probes, controller slices, repo slices, Testcontainers integration). Highest-value remaining work.
+- **WebSocket bearer auth.** `/fax-updates` accepts unauthenticated upgrades today. With the desktop now potentially connecting over an untrusted network, the WS endpoint should require a bearer token (see ADR-0001 follow-ups).
+- **JWT persistence on the desktop.** In-memory only; users re-login on every desktop launch. Promote to OS keychain (Windows DPAPI / macOS Keychain / Linux Secret Service) if that becomes annoying enough.
 
 ---
 
 ## Files pending manual cleanup
 
-These artifacts were neutralized but not deleted because the closing environment didn't authorize file deletion. Safe to remove from the working tree at any time:
+These artifacts were neutralized in-place (sandbox can't unlink). All are unreachable from runtime; safe to remove from the working tree at any time. The 2026-05-18 ADR-0001 split collected them all under `_DEAD_CODE_OPERATOR_DELETE_PLEASE/` to keep the new module trees clean:
 
-- `src/main/resources/fxml/main.fxml` (tombstoned, no longer loaded)
-- `src/main/resources/static/login.html` (tombstoned, the active login is the Thymeleaf template)
-- the 0-byte `java` file at the repo root (looks like an accidental `touch`)
-- `target/` is now in `.gitignore`, but the existing tracked contents need `git rm -r --cached target/` to clear from history
+```sh
+# All of these are tombstones — empty class bodies, deprecation comments.
+rm -rf _DEAD_CODE_OPERATOR_DELETE_PLEASE/
+# Also the agent's sandbox-probe leftovers from the same change:
+rm -rf _AGENT_PROBE_CLEANUP_PLEASE/
+```
+
+Contents:
+
+- `_DEAD_CODE_OPERATOR_DELETE_PLEASE/old_root/FaxTridentApplication.java` (replaced by `fax-trident-server/.../FaxTridentServer.java` and `fax-trident-desktop/.../FaxTridentDesktop.java`)
+- `_DEAD_CODE_OPERATOR_DELETE_PLEASE/service/SmartAssistService.java` (renamed → `ContactSuggestionService`)
+- `_DEAD_CODE_OPERATOR_DELETE_PLEASE/controller/LoginController.java` (form login removed)
+- `_DEAD_CODE_OPERATOR_DELETE_PLEASE/templates/login.html` (form login removed)
+- `_DEAD_CODE_OPERATOR_DELETE_PLEASE/empty_src_tree/` (the old top-level `src/` directory; empty after all files moved)

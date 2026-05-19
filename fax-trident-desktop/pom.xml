@@ -1,0 +1,154 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.xai.trident</groupId>
+        <artifactId>fax-trident-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>fax-trident-desktop</artifactId>
+    <packaging>jar</packaging>
+
+    <name>Fax Trident Desktop</name>
+    <description>JavaFX desktop client for Fax Trident. Talks to the server via HTTP + WebSocket; no Spring.</description>
+
+    <!--
+        ADR-0001 mandates this module is Spring-free. Anything Spring-shaped
+        in here is a regression and should be challenged. The desktop talks
+        to the server through the documented HTTP REST + WebSocket contract,
+        not in-process bean calls.
+
+        Dependencies kept intentionally minimal:
+          - JavaFX controls / fxml / media         - the UI itself
+          - Java-WebSocket                         - WS client to /fax-updates
+          - Jackson databind                       - JSON for the REST + WS payloads
+          - PDFBox                                 - local PDF rendering for the preview pane
+          - SLF4J + Logback                        - logging (matches server's library, but independent classpath)
+          - JUnit Jupiter (test scope)             - just so the module can grow tests; nothing here yet
+
+        HTTP client is the JDK's built-in java.net.http.HttpClient — no
+        OkHttp / Apache HC dependency. The desktop API surface is ~5
+        endpoints; the JDK client is more than enough and saves a transitive
+        dep.
+    -->
+
+    <properties>
+        <jackson.version>2.17.2</jackson.version>
+        <slf4j.version>2.0.13</slf4j.version>
+        <logback.version>1.5.6</logback.version>
+        <junit.version>5.10.3</junit.version>
+    </properties>
+
+    <dependencies>
+        <!-- JavaFX -->
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-controls</artifactId>
+            <version>${javafx.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-fxml</artifactId>
+            <version>${javafx.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-media</artifactId>
+            <version>${javafx.version}</version>
+        </dependency>
+
+        <!-- WebSocket client (same library the in-process version used) -->
+        <dependency>
+            <groupId>org.java-websocket</groupId>
+            <artifactId>Java-WebSocket</artifactId>
+            <version>1.5.6</version>
+        </dependency>
+
+        <!-- JSON -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+
+        <!-- PDF rendering for the preview pane -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>${pdfbox.version}</version>
+        </dependency>
+
+        <!-- Logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>${slf4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>${logback.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Tests (placeholder; no desktop tests yet) -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>fax-trident-desktop-1.0.0-SNAPSHOT</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.openjfx</groupId>
+                <artifactId>javafx-maven-plugin</artifactId>
+                <version>0.0.8</version>
+                <configuration>
+                    <mainClass>com.xai.trident.desktop.FaxTridentDesktop</mainClass>
+                    <jlink>false</jlink>
+                </configuration>
+            </plugin>
+
+            <!--
+                Produce a runnable fat-jar via maven-shade-plugin. JavaFX
+                fat-jars are notoriously awkward (the platform-specific
+                runtime classifiers and the module-path vs. classpath
+                bootstrap), but for a development build this is fine —
+                operators launch via `mvn javafx:run` or `java -jar` with
+                JavaFX on the path. A jpackage native installer is a
+                separate piece of work; see ADR-0001 follow-ups.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>com.xai.trident.desktop.FaxTridentDesktop</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

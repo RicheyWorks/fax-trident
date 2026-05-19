@@ -1,0 +1,118 @@
+# ====================== JWT ======================
+# `jwt.secret` MUST be supplied via environment (JWT_SECRET) or an external
+# config source. No default is provided on purpose — the application will
+# fail at startup with a clear error if it is missing or shorter than 32
+# bytes (HS256 minimum). Generate one with:  openssl rand -base64 48
+#
+# For local development you can set JWT_SECRET in your shell, e.g.:
+#   export JWT_SECRET="$(openssl rand -base64 48)"
+jwt:
+  # secret: <REQUIRED — inject via JWT_SECRET env var>
+  validity: 3600000   # token lifetime in ms (1h)
+
+spring:
+  application:
+    name: fax-trident
+
+  servlet:
+    multipart:
+      # Cap on a single uploaded file. Keep in sync with
+      # FaxUploadService.MAX_UPLOAD_BYTES — they enforce the same limit at
+      # two layers (servlet container reject vs. service-level reject).
+      max-file-size: 25MB
+      max-request-size: 30MB
+
+  # ====================== DATABASE (H2 - dev default) ======================
+  # H2 in-memory for dev. Production overrides live in application-prod.yml
+  # (activated by SPRING_PROFILES_ACTIVE=prod).
+  datasource:
+    url: jdbc:h2:mem:fxdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      # Flyway now owns the schema (audit tech-debt #4). Hibernate is demoted
+      # to `validate` in all environments — it checks that the entity model
+      # matches the migrated schema and fails fast on drift. Was previously
+      # `update` in dev / `validate` in prod (audit 2.21). The reason `update`
+      # is no longer safe even in dev: a developer adding a field would have
+      # Hibernate silently alter the local schema, the migration would be
+      # missing, and the next CI run (or prod deploy) would fail validation.
+      # Now: add a field, write V<n>__<desc>.sql, both environments stay in
+      # lockstep.
+      ddl-auto: validate
+      naming:
+        # Preserve camelCase identifiers from the entity model verbatim.
+        # Spring Boot 3.x's default is SpringPhysicalNamingStrategy, which
+        # converts `createdAt` to `created_at` — but V1__initial_schema.sql
+        # declares the columns as camelCase (per its header comment) and
+        # existing prod databases (created by Hibernate's previous
+        # ddl-auto: update behavior) carry the camelCase form too. Without
+        # this override, Hibernate `validate` looks for `created_at` and
+        # the running app refuses to start; SchemaMigrationTest catches
+        # the same mismatch in CI. Switching to the standard (no-op)
+        # strategy aligns the entity model, the migration, and prod data.
+        # If you ever want snake_case columns, write a V<n> migration that
+        # renames + drops the camelCase columns and remove this property.
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+    # Verbose SQL logging is useful during dev work. application-prod.yml
+    # turns both flags off.
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.H2Dialect
+
+  # ====================== Flyway ======================
+  # Schema migrations live in src/main/resources/db/migration as
+  # V<n>__<description>.sql files (audit tech-debt #4).
+  #
+  # baseline-on-migrate: true is the bridge for existing prod databases.
+  # On a database that already has tables (Hibernate-created) but no
+  # flyway_schema_history, Flyway will insert a baseline row at
+  # baseline-version (V1) and skip V1__initial_schema.sql. Subsequent
+  # V2+ migrations run normally.
+  #
+  # For fresh databases (new dev / test / staging), Flyway runs V1 in
+  # full, then Hibernate validates against the resulting schema.
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 1
+    locations: classpath:db/migration
+
+  # ====================== Redis ======================
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 2000ms
+      database: 0
+
+# ====================== App-specific config ======================
+app:
+  # Server-controlled directory where uploaded fax files are stored. Operators
+  # should override this to an absolute path in production so the location is
+  # unambiguous regardless of the JVM working directory.
+  upload:
+    dir: ./uploads/
+
+  websocket:
+    # Comma-separated list of origins allowed to open the WebSocket. The dev
+    # default here is fine for local work; the prod profile REQUIRES this
+    # property to be set explicitly (see WebSocketConfig#resolveAllowedOrigins
+    # — startup fails fast if it's missing in prod). Example for prod:
+    #   app.websocket.allowed-origins=https://app.example.com,https://admin.example.com
+    allowed-origins: http://localhost:8080
+
+# Production datasource (PostgreSQL) lives in application-prod.yml, activated
+# by SPRING_PROFILES_ACTIVE=prod. The commented block that used to live here
+# was moved out as part of finishing audit 2.21.
+
+# OAuth2 / Google login was removed as part of tech-debt #5 (stateless
+# JWT-only auth). The form-login surface that OAuth2 plugged into no longer
+# exists; the spring-boot-starter-oauth2-client dependency was dropped from
+# pom.xml. If OAuth2 returns, it should mint a JWT on the OAuth callback
+# rather than create a session — see SecurityConfig javadoc.

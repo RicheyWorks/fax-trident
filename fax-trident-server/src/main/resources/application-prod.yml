@@ -1,0 +1,29 @@
+# ====================== Production profile overrides ======================
+# Active when SPRING_PROFILES_ACTIVE=prod (the Dockerfile sets this by default).
+# This file ONLY overrides keys whose dev defaults are unsafe for production —
+# everything else inherits from application.yml.
+#
+# Originally closed audit finding 2.21 (yml hygiene). The ddl-auto override is
+# no longer needed here — application.yml now sets ddl-auto: validate in every
+# environment because Flyway owns the schema (tech-debt #4). Only the SQL-log
+# silencing remains as a prod-specific override.
+
+spring:
+  jpa:
+    # SQL logging adds latency and is noisy under load. Re-enable only when
+    # diagnosing a specific query problem.
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+  # ====================== DATABASE (PostgreSQL) ======================
+  # Uncomment when promoting to a real Postgres deployment. URL, username,
+  # and password must come from the environment (Dockerfile + secrets), not
+  # be committed here.
+  #
+  # datasource:
+  #   url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://db:5432/faxtrident}
+  #   username: ${SPRING_DATASOURCE_USERNAME:trident}
+  #   password: ${SPRING_DATASOURCE_PASSWORD}      # REQUIRED — no default
+  #   driver-class-name: org.postgresql.Driver
