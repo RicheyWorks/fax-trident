@@ -320,7 +320,7 @@ Empty pages return **200 with empty content**, not 404 — 404 is reserved for "
 mvn test
 ```
 
-Current test surface (24 tests across 6 classes, server module; last green `mvn test` 2026-05-18):
+Current test surface (53 tests across 10 classes, server module; last green `mvn test` 2026-05-19):
 
 | Class | Style | What it proves |
 |---|---|---|
@@ -330,8 +330,12 @@ Current test surface (24 tests across 6 classes, server module; last green `mvn 
 | `AdminControllerTest` | `@WebMvcTest` slice | Role gating on `/api/admin/**` — anonymous→401, USER→403, ADMIN→200. |
 | `FaxControllerTest` | `@WebMvcTest` slice | `/api/fax/**` happy paths + audit-regression checks (1.5 upload, 2.16 empty-page-not-404). |
 | `JwtSecurityIntegrationTest` | Minimal `@SpringBootTest` (no DB / Redis / Flyway autoconfig) | End-to-end JWT filter behavior — missing header, valid token, revoked jti (1.6), forged signature (1.1), expired token. |
+| `UserRepositoryTest` | `@DataJpaTest` + Flyway H2 | `findByUsername` happy path + unknown. |
+| `ContactRepositoryTest` | `@DataJpaTest` + Flyway H2 | Every `@Query` on `ContactRepository` incl. the JOIN-over-`faxLogs` audit-2.9 substring search. |
+| `FaxLogRepositoryTest` | `@DataJpaTest` + Flyway H2 | Every `@Query` + derived finder, incl. `countByFaxNumber` audit-2.9, `findErrorsBetween` over the TEXT `errorMessage`, FK navigation via `contact_id`. |
+| `FaxMetadataRepositoryTest` | `@DataJpaTest` + Flyway H2 | Every `@Query`, incl. `SUM`-on-empty-returns-null contract pinned (audit 2.9 null-coalesce). |
 
-`AUDIT.md` §4 has the remaining test plan: repository slice tests per `@Query`, unit tests for `JwtTokenProvider` and `PdfProcessingService`, Testcontainers integration against real Postgres + Redis, a deterministic replacement for the flaky `testListenForInboundFax`, and TestFX coverage for the desktop module.
+`AUDIT.md` §4 has the remaining test plan: unit tests for `JwtTokenProvider` and `PdfProcessingService`, Testcontainers integration against real Postgres + Redis, a deterministic replacement for the flaky `testListenForInboundFax`, and TestFX coverage for the desktop module.
 
 ### Adding an endpoint
 
