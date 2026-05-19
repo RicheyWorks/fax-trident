@@ -320,7 +320,7 @@ Empty pages return **200 with empty content**, not 404 — 404 is reserved for "
 mvn test
 ```
 
-Current test surface (53 tests across 10 classes, server module; last green `mvn test` 2026-05-19):
+Current test surface (85 tests across 12 classes, server module; last green `mvn test` 2026-05-19):
 
 | Class | Style | What it proves |
 |---|---|---|
@@ -334,8 +334,10 @@ Current test surface (53 tests across 10 classes, server module; last green `mvn
 | `ContactRepositoryTest` | `@DataJpaTest` + Flyway H2 | Every `@Query` on `ContactRepository` incl. the JOIN-over-`faxLogs` audit-2.9 substring search. |
 | `FaxLogRepositoryTest` | `@DataJpaTest` + Flyway H2 | Every `@Query` + derived finder, incl. `countByFaxNumber` audit-2.9, `findErrorsBetween` over the TEXT `errorMessage`, FK navigation via `contact_id`. |
 | `FaxMetadataRepositoryTest` | `@DataJpaTest` + Flyway H2 | Every `@Query`, incl. `SUM`-on-empty-returns-null contract pinned (audit 2.9 null-coalesce). |
+| `JwtTokenProviderTest` | Pure unit, no Spring context | `JwtTokenProvider` contracts — constructor fail-fast (1.1), jti allowlist + revocation (1.6), safe role-claim cast (1.7), forged/expired/jti-missing rejection. |
+| `PdfProcessingServiceTest` | Pure unit, no Spring context | `PdfProcessingService` paths — PDF text extraction (valid/empty/non-PDF/missing/corrupt), barcode PNG output (magic-byte verified), cleanup paths. |
 
-`AUDIT.md` §4 has the remaining test plan: unit tests for `JwtTokenProvider` and `PdfProcessingService`, Testcontainers integration against real Postgres + Redis, a deterministic replacement for the flaky `testListenForInboundFax`, and TestFX coverage for the desktop module.
+`AUDIT.md` §4 has the remaining test plan: Testcontainers integration against real Postgres + Redis, a deterministic replacement for the flaky `testListenForInboundFax`, and TestFX coverage for the desktop module.
 
 ### Adding an endpoint
 
