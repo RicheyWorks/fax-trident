@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -16,6 +17,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Shared WebSocket client for the desktop UI. Pre-split this lived as a
@@ -54,6 +56,7 @@ public class FaxUpdateClient {
 
     private final ObjectMapper objectMapper;
     private final URI endpoint;
+    private final Supplier<String> tokenSupplier;
     private final List<Consumer<Map<String, String>>> listeners = new CopyOnWriteArrayList<>();
     private final AtomicReference<WebSocketClient> currentClient = new AtomicReference<>();
     private final ScheduledExecutorService scheduler =
@@ -66,9 +69,20 @@ public class FaxUpdateClient {
     private volatile long nextDelayMs = BASE_RECONNECT_MS;
     private volatile boolean stopped = false;
 
-    public FaxUpdateClient(ObjectMapper objectMapper, String endpointUrl) {
+    /**
+     * @param tokenSupplier returns the current JWT (or null if unauthenticated)
+     *                      at the moment each connect/reconnect fires. The
+     *                      supplier indirection is intentional — Java-WebSocket
+     *                      sets headers at construction time, so a token
+     *                      captured once at FaxUpdateClient construction would
+     *                      go stale on re-login or token rotation. Each
+     *                      {@link #tryConnect()} re-resolves it.
+     */
+    public FaxUpdateClient(ObjectMapper objectMapper, String endpointUrl,
+                           Supplier<String> tokenSupplier) {
         this.objectMapper = objectMapper;
         this.endpoint = URI.create(endpointUrl);
+        this.tokenSupplier = tokenSupplier;
         logger.info("FaxUpdateClient configured for endpoint: {}", endpointUrl);
     }
 
