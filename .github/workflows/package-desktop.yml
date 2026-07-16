@@ -19,7 +19,7 @@
 #
 # Deferred (recorded in AUDIT.md): code signing + notarization. Installers
 # are UNSIGNED — Windows SmartScreen and macOS Gatekeeper will warn.
-# No custom icon yet either; jpackage defaults are used.
+# Icon assets live in fax-trident-desktop/packaging/ (png/ico/icns per OS).
 
 name: Package desktop
 
@@ -49,12 +49,15 @@ jobs:
           - os: ubuntu-latest
             type: deb
             jfx_platform: linux-x64
+            icon: fax-trident-desktop/packaging/FaxTrident.png
           - os: windows-latest
             type: msi
             jfx_platform: windows-x64
+            icon: fax-trident-desktop/packaging/FaxTrident.ico
           - os: macos-latest
             type: dmg
             jfx_platform: osx-aarch64
+            icon: fax-trident-desktop/packaging/FaxTrident.icns
 
     steps:
       - name: Checkout
@@ -102,6 +105,7 @@ jobs:
           jpackage \
             --type "${{ matrix.type }}" \
             --name FaxTrident \
+            --icon "${{ matrix.icon }}" \
             --app-version "$APP_VERSION" \
             --input fax-trident-desktop/target/installer-input \
             --main-jar "$MAIN_JAR" \

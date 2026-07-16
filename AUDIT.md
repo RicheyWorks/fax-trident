@@ -98,7 +98,7 @@ These are net-new opportunities the 2026-05-18 split made visible. They're not r
 ### Follow-ups surfaced by ADR-0002 (build infrastructure)
 
 - **Installer signing + notarization.** The jpackage installers from `.github/workflows/package-desktop.yml` are unsigned: Windows SmartScreen and macOS Gatekeeper will warn on install. Acceptable for self-distribution to a known user base; revisit when that warning becomes an adoption problem. Needs an Authenticode cert (Windows) and an Apple Developer ID + notarization step (macOS) — both cost money and accounts, which is why ADR-0002 explicitly deferred them.
-- **Desktop app icon.** jpackage currently uses platform defaults; add `--icon` per OS (`.ico` / `.icns` / `.png`) once an icon asset exists.
+- ~~**Desktop app icon.**~~ ✅ Closed 2026-07-16. Trident glyph assets generated under `fax-trident-desktop/packaging/` (`.png`/`.ico`/`.icns`); the packaging matrix passes the OS-appropriate one via `--icon`.
 
 ### Optional — housekeeping
 
