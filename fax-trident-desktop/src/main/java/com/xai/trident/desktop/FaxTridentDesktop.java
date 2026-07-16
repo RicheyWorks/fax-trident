@@ -87,7 +87,11 @@ public class FaxTridentDesktop extends Application {
         String wsUrl = prefs.get(DesktopPreferences.KEY_SERVER_WS_URL,
                 deriveWebSocketUrl(prefs.get(DesktopPreferences.KEY_SERVER_BASE_URL,
                         "http://localhost:8080")));
-        this.updateClient = new FaxUpdateClient(json, wsUrl);
+        // Method reference, not a captured string: FaxApiClient swaps the
+        // token on re-login, and FaxUpdateClient re-reads the supplier on
+        // every (re)connect attempt so the WS handshake always carries the
+        // current bearer. (AUDIT follow-up: WebSocket bearer auth.)
+        this.updateClient = new FaxUpdateClient(json, wsUrl, apiClient::getToken);
         PreviewPane previewPane = new PreviewPane(themeManager, updateClient);
         MainView mainView = new MainView(apiClient, previewPane, themeManager, updateClient);
 

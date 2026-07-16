@@ -92,7 +92,7 @@ Not blocking, but you'll want to do them.
 
 These are net-new opportunities the 2026-05-18 split made visible. They're not regressions — the original audit didn't cover them — but they're worth tracking as future work.
 
-- **WebSocket bearer auth on `/fax-updates`.** Pre-split the WS endpoint lived in the same process as its only consumer (the in-JVM JavaFX UI), so a missing auth check was effectively private-network. Post-split, the desktop authenticates over HTTP and then opens an unauthenticated WS for status broadcasts — a leaked endpoint URL is enough to subscribe. Tighten by requiring a bearer in `Sec-WebSocket-Protocol` (or a short-lived query-param token) and rejecting upgrades without it in `WebSocketConfig`.
+- ~~**WebSocket bearer auth on `/fax-updates`.**~~ ✅ Closed 2026-07-16. Investigation showed the server side was already enforced (the `/fax-updates` handshake GET falls under `.anyRequest().authenticated()`, `JwtTokenFilter` reads the `Authorization` header on it like any REST call, and `WebSocketSecurityInterceptor` rejects anonymous upgrades) — the actual gap was the desktop: `FaxUpdateClient` had a `tokenSupplier` field that was never used, and `FaxTridentDesktop` called a two-arg `FaxUpdateClient(json, wsUrl)` constructor that **did not exist**, meaning the desktop module had not compiled since the split. Fix: `FaxUpdateClient.tryConnect()` now sends `Authorization: Bearer <token>` on every (re)connect attempt, reading the supplier fresh each time so re-login/token rotation is picked up; `FaxTridentDesktop` passes `apiClient::getToken`. The nonexistent-constructor call also explains why the unauthenticated WS was never *observed* being rejected — the client never built.
 - **OS-keychain JWT persistence on the desktop.** `FaxApiClient` keeps the JWT in an `AtomicReference<String>`; users re-login every desktop launch. If that's annoying enough, integrate the platform secret store (Windows DPAPI / macOS Keychain / Linux Secret Service via libsecret). Out of scope for the split itself; cited in ADR-0001 "Will need to revisit."
 
 ### Follow-ups surfaced by ADR-0002 (build infrastructure)
@@ -886,14 +886,4 @@ fax-trident-desktop/src/main/java/com/xai/trident/desktop/ui/LoginDialog.java
 
 ### Files moved during ADR-0001 split
 
-Server-side packages (`config/`, `controller/`, `model/`, `ratelimit/`, `repository/`, `service/`, `upload/`, `util/`) and resources (`application*.yml`, `db/migration/`) moved from `src/main/...` to `fax-trident-server/src/main/...` with no logic changes. The desktop UI sources (`ui/MainView.java`, `ui/PreviewPane.java`, `ui/ThemeManager.java`, `ui/FaxUpdateClient.java`) moved to `fax-trident-desktop/src/main/java/com/xai/trident/desktop/ui/` and were rewritten to drop Spring annotations (`@Component`, `@Autowired`, `@Async`, `@Retryable`, `@Recover`), drop `SecurityContextHolder` references, and replace in-process bean dependencies with the new desktop client classes. CSS and sound resources moved to `fax-trident-desktop/src/main/resources/`. Tests moved to `fax-trident-server/src/test/`.
-
-The original `FaxTridentApplication.java`, the tombstoned `LoginController.java` / `SmartAssistService.java`, and the tombstoned `templates/login.html` were moved to `_DEAD_CODE_OPERATOR_DELETE_PLEASE/` (sandbox limitation; see Operator action checklist).
-
-### Files removed during remediation
-
-```
-src/main/resources/fxml/main.fxml      (and the fxml/ directory)
-src/main/resources/static/login.html
-java                                    (0-byte file at repo root)
-```
+Server-side packages (`config/`, `controller/`, `model/`, `ratelimit/`, `repository/`, `service/`, `upload/`, `util/

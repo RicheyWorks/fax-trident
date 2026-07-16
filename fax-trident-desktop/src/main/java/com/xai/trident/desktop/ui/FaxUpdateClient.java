@@ -117,7 +117,22 @@ public class FaxUpdateClient {
         if (stopped) {
             return;
         }
-        WebSocketClient client = new WebSocketClient(endpoint) {
+        // Bearer auth on the upgrade request (AUDIT "Follow-ups surfaced by
+        // ADR-0001": WebSocket bearer auth on /fax-updates). The server's
+        // JwtTokenFilter reads this header on the handshake GET exactly like
+        // any REST call, and the handshake interceptor rejects anonymous
+        // upgrades. The token is fetched fresh from the supplier on EVERY
+        // attempt — a client constructed once at login would send a stale
+        // token after re-login or token rotation, and every reconnect in the
+        // backoff loop would then 401 forever.
+        Map<String, String> headers = new HashMap<>();
+        String token = tokenSupplier.get();
+        if (token != null && !token.isBlank()) {
+            headers.put("Authorization", "Bearer " + token);
+        } else {
+            logger.warn("No JWT available for WebSocket handshake; server will reject the upgrade");
+        }
+        WebSocketClient client = new WebSocketClient(endpoint, headers) {
             @Override
             public void onOpen(ServerHandshake handshake) {
                 logger.info("FaxUpdateClient connected to {}", endpoint);
