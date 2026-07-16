@@ -104,4 +104,17 @@ jobs:
             --name FaxTrident \
             --app-version "$APP_VERSION" \
             --input fax-trident-desktop/target/installer-input \
-            --mai
+            --main-jar "$MAIN_JAR" \
+            --main-class com.xai.trident.desktop.FaxTridentDesktop \
+            --module-path "$JFX_JMODS" \
+            --add-modules javafx.controls,javafx.fxml,javafx.media \
+            ${{ matrix.type == 'deb' && '--linux-shortcut' || '' }} \
+            --dest installer-out
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: FaxTrident-${{ env.APP_VERSION }}-${{ matrix.type }}
+          path: installer-out/*
+          if-no-files-found: error
+          retention-days: 30

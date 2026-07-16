@@ -886,4 +886,14 @@ fax-trident-desktop/src/main/java/com/xai/trident/desktop/ui/LoginDialog.java
 
 ### Files moved during ADR-0001 split
 
-Server-side packages (`config/`, `controller/`, `model/`, `ratelimit/`, `repository/`, `service/`, `upload/`, `util/`) and resources (`application*.yml`, `db/migration/`) moved from `src/main/...` to `fax-trident-server/src/main/...` with no logic changes. The desktop UI sources (`ui/MainView.java`, `ui/PreviewPane.java`, `ui/ThemeManager.java`, `ui/FaxUpdateClient.java`) moved to `fax-trident-desktop/src/main/java/com/xai/trident/desktop/ui/` and were rewritten to drop Spring annotations (`@Component`, `@Autowired`, `@Async`, `@Retryable`, `@Recover`), drop `SecurityContextHolder` references, an
+Server-side packages (`config/`, `controller/`, `model/`, `ratelimit/`, `repository/`, `service/`, `upload/`, `util/`) and resources (`application*.yml`, `db/migration/`) moved from `src/main/...` to `fax-trident-server/src/main/...` with no logic changes. The desktop UI sources (`ui/MainView.java`, `ui/PreviewPane.java`, `ui/ThemeManager.java`, `ui/FaxUpdateClient.java`) moved to `fax-trident-desktop/src/main/java/com/xai/trident/desktop/ui/` and were rewritten to drop Spring annotations (`@Component`, `@Autowired`, `@Async`, `@Retryable`, `@Recover`), drop `SecurityContextHolder` references, and replace in-process bean dependencies with the new desktop client classes. CSS and sound resources moved to `fax-trident-desktop/src/main/resources/`. Tests moved to `fax-trident-server/src/test/`.
+
+The original `FaxTridentApplication.java`, the tombstoned `LoginController.java` / `SmartAssistService.java`, and the tombstoned `templates/login.html` were moved to `_DEAD_CODE_OPERATOR_DELETE_PLEASE/` (sandbox limitation; see Operator action checklist).
+
+### Files removed during remediation
+
+```
+src/main/resources/fxml/main.fxml      (and the fxml/ directory)
+src/main/resources/static/login.html
+java                                    (0-byte file at repo root)
+```

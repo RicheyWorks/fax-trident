@@ -428,4 +428,24 @@ The codebase has been through a full security + correctness audit. The major cha
 - **Inbound-fax simulator profile-gated.** `Math.random() > 0.8` no longer manufactures fake contacts in production — the `@Scheduled` trigger is `@Profile("dev")`.
 - **Honest naming.** `SmartAssistService` → `ContactSuggestionService`. The class never had a model; the name implied otherwise.
 - **Unique index names.** `idx_fax_number` collided between `contacts` and `fax_logs` (Hibernate/Postgres/H2 use a single global namespace), silently leaving `fax_logs.faxNumber` unindexed. Renamed to `idx_contact_fax_number` on `contacts`.
-- **Structural cleanup.** `User` entity moved from `SecurityConfig` to `model/` + `repository/`. JavaFX FXML+programmatic duel resolved (programmatic-on
+- **Structural cleanup.** `User` entity moved from `SecurityConfig` to `model/` + `repository/`. JavaFX FXML+programmatic duel resolved (programmatic-only). Single shared `FaxUpdateClient` replaces two `WebSocketClient`s. `application.yml` `datasource:` / `jpa:` / `data:` moved from `app:` to `spring:` where Spring auto-config actually reads them.
+- **CI on JDK 21** (`.github/workflows/ci.yml`). Dockerfile runtime base is `21-jre-jammy` (was Alpine — musl + missing fontconfig was a silent risk for PDFBox).
+- **`.gitignore`** covers `target/`, IDE folders, `.env*`, `*.pem`/`*.key`, and the runtime `uploads/` / `barcodes/` directories.
+
+---
+
+## Known follow-ups
+
+Forward-looking work the audit identified but didn't itself cover:
+
+- **Real ML behind `ContactSuggestionService`.** Today it's a deterministic score-based fuzzy matcher (`history*10 + name_contains*5 + fax_contains*3`). If you have a real model, the `suggestContact(...)` method is the right seam to plug it into — score against both and pick, or replace wholesale.
+- **Single auth schema for roles.** `User.roles` is a comma-separated `VARCHAR`. A join table (`user_roles`) would let you query, index, and constrain roles properly.
+- **Real test suite.** Two server-side tests today (`FaxEngineServiceTest`, `SchemaMigrationTest`). `AUDIT.md` §4 sketches the layered plan (security probes, controller slices, repo slices, Testcontainers integration). Highest-value remaining work.
+- **WebSocket bearer auth.** `/fax-updates` accepts unauthenticated upgrades today. With the desktop now potentially connecting over an untrusted network, the WS endpoint should require a bearer token (see ADR-0001 follow-ups).
+- **JWT persistence on the desktop.** In-memory only; users re-login on every desktop launch. Promote to OS keychain (Windows DPAPI / macOS Keychain / Linux Secret Service) if that becomes annoying enough.
+
+---
+
+## History
+
+The 2026-05-18 ADR-0001 split (commit `a4b8faa`) was the last large structural change. Before that, the codebase was a single Maven module that ran the Spring Boot server and the JavaFX desktop UI in one JVM. See `docs/adr/0001-decouple-javafx-from-spring-boot.md` for the rationale and `AUDIT.md` for the full audit trail.
