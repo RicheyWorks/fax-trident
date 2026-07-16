@@ -1,6 +1,6 @@
 # ADR-0002: Build infrastructure and delivery phases
 
-**Status:** Proposed
+**Status:** Accepted (2026-07-16 — validated by the green v1.0.0 end-to-end release run)
 **Date:** 2026-07-16
 **Deciders:** Richmond (operator/owner). Author: this ADR.
 
@@ -242,13 +242,15 @@ per-push feedback fast and free while making releases comprehensive.
        `.deb`; `workflow_dispatch` + `workflow_call` (invoked by Phase 4).
 8. [x] Record signing/notarization as a deferred follow-up in AUDIT.md.
 
-### Phase 4 — Releases — workflows done 2026-07-16; first release pending
+### Phase 4 — Releases — ✅ done 2026-07-16 (v1.0.0 released)
 9. [x] Add `release.yml`: on `v*` tag — `mvn versions:set`, verify, run
        desktop matrix via `workflow_call`, create GitHub Release with
        installers and image digest (digest resolved best-effort, since
        `docker-publish.yml` races on the same tag).
-10. [ ] Cut `v1.0.0` end-to-end as validation. **Operator action:**
-        `git tag v1.0.0 && git push origin v1.0.0` after the Phase 1-4
-        changes land on `main`.
+10. [x] Cut `v1.0.0` end-to-end as validation. Done 2026-07-16 — the tag
+        was re-cut twice along the way (first on a pre-workflow commit, then
+        on a commit whose desktop module didn't compile; see AUDIT.md WS
+        follow-up closure) before the green run from `cebce5e`: CI, GHCR
+        image (`1.0.0` + `latest`), three installers, GitHub Release.
 11. [x] Add a "Releasing" section to README (tag format, SemVer-by-contract
         rule).
