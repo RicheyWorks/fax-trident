@@ -1,0 +1,107 @@
+# Desktop installers via jpackage. ADR-0002 Phase 3.
+#
+# jpackage cannot cross-build, so this is a 3-OS matrix: each leg builds the
+# desktop module, fetches the matching JavaFX jmods from Gluon, and produces
+# a native installer with a jlink-trimmed runtime:
+#   windows-latest  -> .msi   (WiX is preinstalled on GitHub's Windows runners)
+#   macos-latest    -> .dmg   (arm64 — macos-latest runners are Apple Silicon)
+#   ubuntu-latest   -> .deb
+#
+# Recipe is the documented OpenJFX one for NON-modular apps: app jar + deps
+# on --input (classpath), JavaFX as jmods on --module-path with
+# --add-modules. The pom's `dist` profile assembles target/installer-input/
+# and deliberately excludes org.openjfx jars — JavaFX must not appear on
+# both module path and classpath.
+#
+# Deliberately manual (workflow_dispatch) for now; Phase 4's release
+# workflow will invoke it on v* tags. macOS/Windows runner minutes are
+# 10x/2x Linux, so this must never run per-push.
+#
+# Deferred (recorded in AUDIT.md): code signing + notarization. Installers
+# are UNSIGNED — Windows SmartScreen and macOS Gatekeeper will warn.
+# No custom icon yet either; jpackage defaults are used.
+
+name: Package desktop
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: >-
+          Release version (e.g. 1.2.0). When set (by release.yml), the
+          reactor version is rewritten before building so installer metadata
+          matches the tag instead of the pom's -SNAPSHOT placeholder.
+        required: false
+        type: string
+
+env:
+  JAVAFX_VERSION: '21.0.2'
+
+jobs:
+  package:
+    name: ${{ matrix.type }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            type: deb
+            jfx_platform: linux-x64
+          - os: windows-latest
+            type: msi
+            jfx_platform: windows-x64
+          - os: macos-latest
+            type: dmg
+            jfx_platform: osx-aarch64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Set reactor version (release builds only)
+        if: inputs.version != ''
+        shell: bash
+        run: mvn --batch-mode --no-transfer-progress versions:set -DnewVersion="${{ inputs.version }}" -DgenerateBackupPoms=false
+
+      - name: Build desktop module (dist profile)
+        shell: bash
+        run: mvn --batch-mode --no-transfer-progress -pl fax-trident-desktop -am package -DskipTests -Pdist
+
+      - name: Stage app jar next to its libs
+        shell: bash
+        run: cp fax-trident-desktop/target/fax-trident-desktop-*.jar fax-trident-desktop/target/installer-input/
+
+      - name: Fetch JavaFX jmods (${{ matrix.jfx_platform }})
+        shell: bash
+        run: |
+          curl -fsSL -o jmods.zip \
+            "https://download2.gluonhq.com/openjfx/${JAVAFX_VERSION}/openjfx-${JAVAFX_VERSION}_${{ matrix.jfx_platform }}_bin-jmods.zip"
+          unzip -q jmods.zip -d jfx
+          echo "JFX_JMODS=$(pwd)/jfx/javafx-jmods-${JAVAFX_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Resolve app version (strip -SNAPSHOT for installer metadata)
+        shell: bash
+        # msi and dmg both reject non-numeric versions like 1.0.0-SNAPSHOT.
+        run: |
+          RAW=$(mvn -q -pl fax-trident-desktop help:evaluate -Dexpression=project.version -DforceStdout)
+          echo "APP_VERSION=${RAW%-SNAPSHOT}" >> "$GITHUB_ENV"
+
+      - name: jpackage (${{ matrix.type }})
+        shell: bash
+        run: |
+          MAIN_JAR=$(basename fax-trident-desktop/target/fax-trident-desktop-*.jar)
+          jpackage \
+            --type "${{ matrix.type }}" \
+            --name FaxTrident \
+            --app-version "$APP_VERSION" \
+            --input fax-trident-desktop/target/installer-input \
+            --mai

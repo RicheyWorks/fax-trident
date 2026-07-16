@@ -1,0 +1,120 @@
+# Tag-driven release. ADR-0002 Phase 4.
+#
+# Pushing a tag `vX.Y.Z` produces, in one workflow:
+#   1. verify   — reactor version set to X.Y.Z, full `mvn verify`
+#   2. desktop  — package-desktop.yml (workflow_call) with the same version:
+#                 .msi / .dmg / .deb installers
+#   3. release  — GitHub Release with the installers attached and the server
+#                 image reference (+ digest, best-effort) in the notes
+#
+# The server image itself is pushed by docker-publish.yml, which triggers
+# independently on the same tag (semver + latest tags). This workflow doesn't
+# rebuild it — it only resolves the digest for the notes, with retries, since
+# the two workflows race.
+#
+# Versioning policy (ADR-0002): poms stay 1.x.y-SNAPSHOT on main; the release
+# version exists only inside this workflow run (`versions:set`, never
+# committed back). SemVer is keyed to the REST + WS contract: breaking API
+# change = major, additive = minor, fix = patch.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  version:
+    name: Derive version from tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Strip leading v
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify reactor at release version
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Set reactor version
+        run: mvn --batch-mode --no-transfer-progress versions:set -DnewVersion="${{ needs.version.outputs.version }}" -DgenerateBackupPoms=false
+
+      - name: Verify (compile + test)
+        env:
+          JWT_SECRET: ci-only-not-a-real-secret-padding-padding-padding
+        run: mvn --batch-mode --no-transfer-progress verify
+
+  desktop:
+    name: Desktop installers
+    needs: [version, verify]
+    uses: ./.github/workflows/package-desktop.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  release:
+    name: Create GitHub Release
+    needs: [version, verify, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+
+      - name: Resolve server image digest (best-effort)
+        id: digest
+        continue-on-error: true
+        # docker-publish.yml races this workflow on the same tag; poll for
+        # the semver-tagged image for up to ~5 minutes, then give up without
+        # failing the release. IMAGE must be lowercase for the registry.
+        run: |
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]'):${{ needs.version.outputs.version }}"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          for i in $(seq 1 20); do
+            if DIGEST=$(docker buildx imagetools inspect "$IMAGE" --format '{{println .Manifest.Digest}}' 2>/dev/null); then
+              echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "digest=(not yet published — see docker-publish workflow run)" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Fax Trident ${{ needs.version.outputs.version }}
+          generate_release_notes: true
+          files: installers/*
+          body: |
+            ## Server image
+
+            ```
+            docker pull ${{ steps.digest.outputs.image }}
+            ```
+
+            Digest: `${{ steps.digest.outputs.digest }}`
+
+            ## Desktop installers
+
+            Attached below: `.msi` (Windows x64), `.dmg` (macOS arm64), `.deb` (Linux x64).
+            Installers are unsigned — SmartScreen/Gatekeeper will warn (see AUDIT.md follow-ups).
+
+            Desktop ${{ needs.version.outputs.version }} is built against server ${{ needs.version.outputs.version }} — the pair share one REST + WebSocket contract (ADR-0002 versioning policy).

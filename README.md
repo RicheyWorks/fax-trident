@@ -90,6 +90,31 @@ docker run \
   -p 8080:8080 fax-trident
 ```
 
+#### Pre-built images (GHCR)
+
+CI publishes the server image to GitHub Container Registry on every push to
+`main` and on release tags (`.github/workflows/docker-publish.yml`, ADR-0002):
+
+| Tag | Meaning |
+|---|---|
+| `ghcr.io/richeyworks/fax-trident:sha-<short>` | Exact commit on `main`. Use for pinning/rollback. |
+| `ghcr.io/richeyworks/fax-trident:X.Y.Z` | Release `vX.Y.Z`. Preferred for deploys. |
+| `ghcr.io/richeyworks/fax-trident:latest` | Most recent release tag (not `main` HEAD). |
+
+```sh
+docker pull ghcr.io/richeyworks/fax-trident:latest
+docker run \
+  -e JWT_SECRET=... \
+  -e SPRING_DATASOURCE_PASSWORD=... \
+  -e app_websocket_allowed-origins=https://app.example.com \
+  -p 8080:8080 ghcr.io/richeyworks/fax-trident:latest
+```
+
+The same runtime requirements apply as for a local build: `JWT_SECRET` is
+mandatory (fail-fast), Postgres + Redis reachable, and the prod-profile
+settings from the Configuration table below. Prefer a pinned `X.Y.Z` or
+`sha-` tag over `latest` for anything that matters — `latest` moves.
+
 ---
 
 ## Configuration
@@ -365,6 +390,26 @@ Current test surface (85 tests across 12 classes, server module; last green `mvn
 
 ---
 
+## Releasing
+
+Releases are tag-driven (ADR-0002). Poms stay `1.x.y-SNAPSHOT` on `main`; the concrete version exists only inside the release workflow.
+
+```sh
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+That single push fans out to:
+
+- `release.yml` — sets the reactor version to `1.2.0` in-workflow, runs the full `mvn verify`, builds the three desktop installers (via `package-desktop.yml`), and publishes a GitHub Release with the installers attached and the server image digest in the notes.
+- `docker-publish.yml` — pushes `ghcr.io/richeyworks/fax-trident:1.2.0` and `:latest`.
+
+Version semantics are keyed to the REST + WebSocket contract, since that's what desktop/server compatibility hangs on: a breaking API change bumps major, an additive change bumps minor, a fix bumps patch. Desktop and server share one version — `v1.2.0` always names a compatible pair.
+
+Desktop installers can also be built ad hoc without a release via the **Package desktop** workflow's manual trigger (Actions tab → Package desktop → Run workflow).
+
+---
+
 ## Hardening summary
 
 The codebase has been through a full security + correctness audit. The major changes (all closed; see `AUDIT.md` for the full trail):
@@ -383,24 +428,4 @@ The codebase has been through a full security + correctness audit. The major cha
 - **Inbound-fax simulator profile-gated.** `Math.random() > 0.8` no longer manufactures fake contacts in production — the `@Scheduled` trigger is `@Profile("dev")`.
 - **Honest naming.** `SmartAssistService` → `ContactSuggestionService`. The class never had a model; the name implied otherwise.
 - **Unique index names.** `idx_fax_number` collided between `contacts` and `fax_logs` (Hibernate/Postgres/H2 use a single global namespace), silently leaving `fax_logs.faxNumber` unindexed. Renamed to `idx_contact_fax_number` on `contacts`.
-- **Structural cleanup.** `User` entity moved from `SecurityConfig` to `model/` + `repository/`. JavaFX FXML+programmatic duel resolved (programmatic-only). Single shared `FaxUpdateClient` replaces two `WebSocketClient`s. `application.yml` `datasource:` / `jpa:` / `data:` moved from `app:` to `spring:` where Spring auto-config actually reads them.
-- **CI on JDK 21** (`.github/workflows/ci.yml`). Dockerfile runtime base is `21-jre-jammy` (was Alpine — musl + missing fontconfig was a silent risk for PDFBox).
-- **`.gitignore`** covers `target/`, IDE folders, `.env*`, `*.pem`/`*.key`, and the runtime `uploads/` / `barcodes/` directories.
-
----
-
-## Known follow-ups
-
-Forward-looking work the audit identified but didn't itself cover:
-
-- **Real ML behind `ContactSuggestionService`.** Today it's a deterministic score-based fuzzy matcher (`history*10 + name_contains*5 + fax_contains*3`). If you have a real model, the `suggestContact(...)` method is the right seam to plug it into — score against both and pick, or replace wholesale.
-- **Single auth schema for roles.** `User.roles` is a comma-separated `VARCHAR`. A join table (`user_roles`) would let you query, index, and constrain roles properly.
-- **Real test suite.** Two server-side tests today (`FaxEngineServiceTest`, `SchemaMigrationTest`). `AUDIT.md` §4 sketches the layered plan (security probes, controller slices, repo slices, Testcontainers integration). Highest-value remaining work.
-- **WebSocket bearer auth.** `/fax-updates` accepts unauthenticated upgrades today. With the desktop now potentially connecting over an untrusted network, the WS endpoint should require a bearer token (see ADR-0001 follow-ups).
-- **JWT persistence on the desktop.** In-memory only; users re-login on every desktop launch. Promote to OS keychain (Windows DPAPI / macOS Keychain / Linux Secret Service) if that becomes annoying enough.
-
----
-
-## History
-
-The 2026-05-18 ADR-0001 split (commit `a4b8faa`) was the last large structural change. Before that, the codebase was a single Maven module that ran the Spring Boot server and the JavaFX desktop UI in one JVM. See `docs/adr/0001-decouple-javafx-from-spring-boot.md` for the rationale and `AUDIT.md` for the full audit trail.
+- **Structural cleanup.** `User` entity moved from `SecurityConfig` to `model/` + `repository/`. JavaFX FXML+programmatic duel resolved (programmatic-on

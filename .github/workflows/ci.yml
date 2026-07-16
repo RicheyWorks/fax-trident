@@ -17,6 +17,13 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Superseded pushes to the same branch/PR cancel the in-flight run. Saves
+# runner minutes and stops a stale commit from reporting the latest status.
+# (ADR-0002 Phase 1)
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build & test (JDK 21)
@@ -46,6 +53,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: surefire-reports
-          path: target/surefire-reports/
+          # Glob, not root path: since the ADR-0001 multi-module split,
+          # reports land in each module's target/, not the reactor root.
+          # The old `target/surefire-reports/` matched nothing and silently
+          # uploaded zero files on failure. (ADR-0002 Phase 1)
+          path: '**/target/surefire-reports/'
           if-no-files-found: ignore
           retention-days: 7
+
+      # Smoke-test the server image build so Dockerfile breakage (layer
+      # paths, -pl flags, module renames) fails the PR instead of the next
+      # deploy. Build only — publishing is Phase 2's workflow. (ADR-0002)
+      - name: Docker build smoke test
+        run: docker build -t fax-trident-ci-smoke:${{ github.sha }} .

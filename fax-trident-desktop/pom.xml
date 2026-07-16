@@ -107,7 +107,10 @@
     </dependencies>
 
     <build>
-        <finalName>fax-trident-desktop-1.0.0-SNAPSHOT</finalName>
+        <!-- Derived, not hardcoded: release builds rewrite the reactor
+             version via versions:set (ADR-0002 Phase 4), and the jar name
+             must follow. -->
+        <finalName>${project.artifactId}-${project.version}</finalName>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -150,5 +153,47 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            `dist` assembles the jpackage input directory (ADR-0002 Phase 3).
+
+            Copies runtime dependencies into target/installer-input/, EXCLUDING
+            org.openjfx: JavaFX enters the installer as jmods on jpackage's
+            module path (per the OpenJFX packaging docs), not as classpath
+            jars. Shipping both would put the same classes on module path and
+            classpath. The CI workflow (.github/workflows/package-desktop.yml)
+            copies the app jar in next to them and runs jpackage on each
+            target OS — jpackage cannot cross-build, hence the 3-OS matrix.
+
+            Not active by default so `mvn package` stays fast for dev loops:
+                mvn -pl fax-trident-desktop -am package -Pdist
+        -->
+        <profile>
+            <id>dist</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>copy-installer-libs</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>copy-dependencies</goal>
+                                </goals>
+                                <configuration>
+                                    <outputDirectory>${project.build.directory}/installer-input</outputDirectory>
+                                    <includeScope>runtime</includeScope>
+                                    <excludeGroupIds>org.openjfx</excludeGroupIds>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
 </project>
