@@ -49,11 +49,27 @@ public class WebSocketConfig implements WebSocketConfigurer {
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         logger.info("Registering WebSocket handlers for Fax Trident...");
         String[] origins = resolveAllowedOrigins();
+        // Raw RFC 6455 endpoint. The desktop's Java-WebSocket client (and any
+        // non-browser client) performs a plain upgrade against the documented
+        // ws://host/fax-updates URL. This registration must NOT go through
+        // SockJS: a SockJS-wrapped path serves the SockJS protocol instead
+        // (GET {path} -> "Welcome to SockJS!", transports under
+        // {path}/{server}/{session}/{transport}) and rejects plain upgrades
+        // at the root, which left the desktop client in an infinite
+        // reconnect loop.
         registry.addHandler(faxUpdateHandler(), "/fax-updates")
             .addInterceptors(new WebSocketSecurityInterceptor())
+            .setAllowedOrigins(origins);
+        // SockJS variant for browser clients that need fallback transports
+        // (xhr-streaming etc. behind restrictive proxies). Same handler, same
+        // auth interceptor, separate path so the raw contract above stays
+        // stable.
+        registry.addHandler(faxUpdateHandler(), "/fax-updates-sockjs")
+            .addInterceptors(new WebSocketSecurityInterceptor())
             .setAllowedOrigins(origins)
-            .withSockJS(); // Fallback for browsers
-        logger.info("WebSocket handler registered at '/fax-updates' with allowed origins {}",
+            .withSockJS();
+        logger.info("WebSocket handlers registered at '/fax-updates' (raw) and "
+                + "'/fax-updates-sockjs' (SockJS) with allowed origins {}",
                 (Object) origins);
     }
 

@@ -167,7 +167,9 @@ settings from the Configuration table below. Prefer a pinned `X.Y.Z` or
 
 The desktop and the server are independent processes. Previously they shared one JVM and the desktop UI `@Autowired` server beans directly; that coupling was removed in ADR-0001 (`docs/adr/0001-decouple-javafx-from-spring-boot.md`). The desktop now authenticates over `POST /api/auth/login` and treats the server like any other API consumer.
 
-The WebSocket client (`FaxUpdateClient`) is owned by the desktop. Lifecycle is explicit — created by `FaxTridentDesktop.start(Stage)` after login succeeds, closed by `FaxTridentDesktop.stop()`. Reconnect uses exponential backoff capped at 30s.
+The WebSocket client (`FaxUpdateClient`) is owned by the desktop. Lifecycle is explicit — created by `FaxTridentDesktop.start(Stage)` after login succeeds, closed by `FaxTridentDesktop.stop()`. Reconnect uses exponential backoff capped at 30s. Every (re)connect sends `Authorization: Bearer <jwt>` on the upgrade request — the server's JWT filter authenticates the handshake GET like any REST call, and anonymous upgrades are rejected.
+
+Two WebSocket endpoints serve the same broadcast handler: `/fax-updates` is the raw RFC 6455 endpoint (what the desktop and any non-browser client uses), and `/fax-updates-sockjs` is the SockJS-wrapped variant for browser clients that need fallback transports. Raw clients must use `/fax-updates` — a SockJS path does not accept plain upgrades at its root.
 
 The PDF preview pane (`PreviewPane`) still uses PDFBox, but locally on the desktop's own copy of the file — no network call. After upload + send succeed, status updates come back via the WebSocket broadcast.
 
